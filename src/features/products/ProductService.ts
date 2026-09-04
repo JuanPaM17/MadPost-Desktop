@@ -1,0 +1,57 @@
+import { sessionContext } from "../../core/session/SessionContext";
+import { auditService } from "../audit/AuditService";
+import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
+import { pendingDeletesRepository, syncQueueRepository } from "../../infrastructure/sqlite/repositories";
+
+export type Product = { id: string; tenantId: string; categoryId: string | null; categoryName: string | null; name: string; price: number; active: number; stock: number | null; stockMode: "infinite" | "direct" | "supplies"; description: string | null; optionNames: string | null; createdAt: string; updatedAt: string; deletionReason: string | null };
+export type ProductOption = { id: string; name: string; active: number; sortOrder: number };
+export type ProductSupply = { supplyId: string; quantityPerSale: number };
+export type ProductSupplyOption = { id: string; name: string };
+
+class ProductService {
+  private tenantId() { const tenantId = sessionContext.current()?.tenantId; if (!tenantId) throw new Error("No hay una sesion activa."); return tenantId; }
+  async list() {
+    const database = await databaseManager.database(); const tenantId = this.tenantId();
+    const rows = await database.select<{ id: string; tenant_id: string; category_id: string | null; category_name: string | null; name: string; price: number; active: number; stock: number | null; description: string | null; created_at: string; updated_at: string; supply_count: number; discount_count: number; open_order_count: number; combo_count: number }[]>(`SELECT p.id, p.tenant_id, p.category_id, c.name AS category_name, p.name, p.price, p.active, p.stock, p.description, p.created_at, p.updated_at,
+      (SELECT COUNT(*) FROM product_supplies ps WHERE ps.product_id=p.id) AS supply_count,
+      (SELECT COUNT(*) FROM discounts d WHERE d.product_id=p.id AND d.active=1) AS discount_count,
+      (SELECT COUNT(*) FROM table_order_items toi JOIN table_orders t ON t.id=toi.table_order_id WHERE toi.product_id=p.id AND t.status='OPEN' AND t.tenant_id=p.tenant_id) AS open_order_count,
+      (SELECT COUNT(*) FROM combo_items ci WHERE ci.product_id=p.id) AS combo_count
+      FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.tenant_id=$1 ORDER BY p.active DESC, p.name COLLATE NOCASE`, [tenantId]);
+    const optionRows = await database.select<{ product_id: string; name: string }[]>("SELECT po.product_id, po.name FROM product_options po JOIN products p ON p.id=po.product_id WHERE p.tenant_id=$1", [tenantId]);
+    const optionNamesByProduct = new Map<string, string[]>();
+    for (const option of optionRows) optionNamesByProduct.set(option.product_id, [...(optionNamesByProduct.get(option.product_id) ?? []), option.name]);
+    return rows.map((row): Product => ({ id: row.id, tenantId: row.tenant_id, categoryId: row.category_id, categoryName: row.category_name, name: row.name, price: row.price, active: row.active, stock: row.stock, stockMode: row.stock !== null ? "direct" : row.supply_count > 0 ? "supplies" : "infinite", description: row.description, optionNames: optionNamesByProduct.get(row.id)?.join(" ") ?? null, createdAt: row.created_at, updatedAt: row.updated_at, deletionReason: row.discount_count > 0 ? "Tiene descuento activo" : row.open_order_count > 0 ? "Tiene mesa abierta" : row.combo_count > 0 ? `Esta en ${row.combo_count} combo(s)` : null }));
+  }
+  async save(existing: Product | null, values: { name: string; price: number; categoryId: string | null; description: string; stock: number | null }) {
+    const name = values.name.trim(); if (!name) throw new Error("El nombre del producto es obligatorio."); if (!Number.isFinite(values.price) || values.price < 0) throw new Error("El precio debe ser un numero valido."); if (values.stock !== null && (!Number.isFinite(values.stock) || values.stock < 0)) throw new Error("El stock debe ser un numero positivo.");
+    const now = new Date().toISOString(); const tenantId = this.tenantId();
+    const product: Product = existing ? { ...existing, name, price: values.price, categoryId: values.categoryId, description: values.description.trim() || null, stock: values.stock, stockMode: values.stock === null ? "infinite" : "direct", updatedAt: now } : { id: crypto.randomUUID(), tenantId, categoryId: values.categoryId, categoryName: null, name, price: values.price, active: 1, stock: values.stock, stockMode: values.stock === null ? "infinite" : "direct", description: values.description.trim() || null, optionNames: null, createdAt: now, updatedAt: now, deletionReason: null };
+    const database = await databaseManager.database();
+    await database.execute(`INSERT INTO products(id, tenant_id, category_id, name, price, active, stock, description, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT(id) DO UPDATE SET category_id=excluded.category_id, name=excluded.name, price=excluded.price, stock=excluded.stock, description=excluded.description, updated_at=excluded.updated_at`, [product.id, product.tenantId, product.categoryId, product.name, product.price, product.active, product.stock, product.description, product.createdAt, product.updatedAt]);
+    await syncQueueRepository.enqueue("products", product.id, "INSERT", payload(product));
+    await auditService.log(existing ? "EDITAR_PRODUCTO" : "CREAR_PRODUCTO", "CATALOGO", `Producto: ${product.name} | Precio: $${product.price}`, product.id);
+    return product;
+  }
+  async setActive(product: Product, active: boolean) { const database = await databaseManager.database(); await database.execute("UPDATE products SET active=$1, updated_at=$2 WHERE id=$3 AND tenant_id=$4", [active ? 1 : 0, new Date().toISOString(), product.id, this.tenantId()]); await syncQueueRepository.enqueue("products", product.id, "UPDATE", { id: product.id, active }); await auditService.log(active ? "ACTIVAR_PRODUCTO" : "DESACTIVAR_PRODUCTO", "CATALOGO", `Producto: ${product.name} | Precio: $${product.price}`, product.id); }
+  async deletionCheck(productId: string) {
+    const database = await databaseManager.database(); const tenantId = this.tenantId();
+    const rows = await database.select<{ discount_count: number; open_order_count: number; combo_count: number }[]>(`SELECT
+      (SELECT COUNT(*) FROM discounts WHERE product_id=$1 AND active=1) AS discount_count,
+      (SELECT COUNT(*) FROM table_order_items toi JOIN table_orders t ON t.id=toi.table_order_id WHERE toi.product_id=$1 AND t.status='OPEN' AND t.tenant_id=$2) AS open_order_count,
+      (SELECT COUNT(*) FROM combo_items WHERE product_id=$1) AS combo_count`, [productId, tenantId]);
+    const check = rows[0] ?? { discount_count: 0, open_order_count: 0, combo_count: 0 };
+    const reason = check.discount_count > 0 ? "Tiene descuento activo" : check.open_order_count > 0 ? "Tiene mesa abierta" : check.combo_count > 0 ? `Esta en ${check.combo_count} combo(s)` : null;
+    return { canDelete: reason === null, reason };
+  }
+  async remove(product: Product) { const database = await databaseManager.database(); const tenantId = this.tenantId(); const discounts = await database.select<{ id: string }[]>("SELECT id FROM discounts WHERE product_id=$1 AND tenant_id=$2", [product.id, tenantId]); await database.execute("DELETE FROM sync_queue WHERE table_name='product_supplies' AND record_id LIKE $1 AND synced_at IS NULL", [`${product.id}:%`]); await database.execute("DELETE FROM sync_queue WHERE table_name='product_options' AND record_id IN (SELECT id FROM product_options WHERE product_id=$1) AND synced_at IS NULL", [product.id]); await database.execute("DELETE FROM sync_queue WHERE table_name='products' AND record_id=$1 AND synced_at IS NULL", [product.id]); for (const discount of discounts) await syncQueueRepository.clearForRecord("discounts", discount.id); await database.execute("DELETE FROM product_supplies WHERE product_id=$1", [product.id]); await database.execute("DELETE FROM product_options WHERE product_id=$1", [product.id]); await database.execute("DELETE FROM discounts WHERE product_id=$1 AND tenant_id=$2", [product.id, tenantId]); for (const discount of discounts) await pendingDeletesRepository.enqueue("discounts", discount.id); await database.execute("DELETE FROM products WHERE id=$1 AND tenant_id=$2", [product.id, tenantId]); await pendingDeletesRepository.enqueue("products", product.id); await auditService.log("ELIMINAR_PRODUCTO", "CATALOGO", `Producto: ${product.name} | Precio: $${product.price}`, product.id); }
+  async categories() { const database = await databaseManager.database(); return database.select<{ id: string; name: string }[]>("SELECT id, name FROM categories WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [this.tenantId()]); }
+  async options(productId: string) { const database = await databaseManager.database(); const rows = await database.select<{ id: string; name: string; active: number; sort_order: number }[]>("SELECT id, name, active, sort_order FROM product_options WHERE product_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [productId]); return rows.map((row) => ({ id: row.id, name: row.name, active: row.active, sortOrder: row.sort_order })); }
+  async saveOptions(productId: string, options: ProductOption[]) { const database = await databaseManager.database(); await database.execute("DELETE FROM product_options WHERE product_id=$1", [productId]); for (const [index, option] of options.entries()) { const item = { ...option, id: option.id || crypto.randomUUID(), sortOrder: index }; await database.execute("INSERT INTO product_options(id, product_id, name, active, sort_order) VALUES ($1,$2,$3,$4,$5)", [item.id, productId, item.name.trim(), item.active, item.sortOrder]); await syncQueueRepository.enqueue("product_options", item.id, "INSERT", { id: item.id, product_id: productId, name: item.name.trim(), active: item.active === 1, sort_order: item.sortOrder }); } }
+  async supplies() { const database = await databaseManager.database(); return database.select<ProductSupplyOption[]>("SELECT id, name FROM supplies WHERE tenant_id=$1 AND active=1 ORDER BY name COLLATE NOCASE", [this.tenantId()]); }
+  async productSupplies(productId: string) { const database = await databaseManager.database(); return database.select<{ supply_id: string; quantity_per_sale: number }[]>("SELECT supply_id, quantity_per_sale FROM product_supplies WHERE product_id=$1", [productId]).then((rows) => rows.map((row) => ({ supplyId: row.supply_id, quantityPerSale: row.quantity_per_sale }))); }
+  async setSupplies(productId: string, links: ProductSupply[]) { const database = await databaseManager.database(); await database.execute("DELETE FROM product_supplies WHERE product_id=$1", [productId]); for (const link of links) { await database.execute("INSERT INTO product_supplies(product_id,supply_id,quantity_per_sale) VALUES ($1,$2,$3)", [productId, link.supplyId, link.quantityPerSale]); await syncQueueRepository.enqueue("product_supplies", `${productId}:${link.supplyId}`, "INSERT", { product_id: productId, supply_id: link.supplyId, quantity_per_sale: link.quantityPerSale }); } }
+}
+function payload(product: Product) { return { id: product.id, tenant_id: product.tenantId, category_id: product.categoryId, name: product.name, price: product.price, active: product.active === 1, stock: product.stock, description: product.description, created_at: product.createdAt, updated_at: product.updatedAt }; }
+export const productService = new ProductService();
