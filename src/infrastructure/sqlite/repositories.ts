@@ -131,6 +131,10 @@ export const recoveryRepository = {
     );
     return rows[0] ?? null;
   },
+  async remove(userId: string) {
+    const database = await databaseManager.database();
+    await database.execute("DELETE FROM recovery_codes WHERE user_id = $1", [userId]);
+  },
 };
 
 export const syncQueueRepository = {

@@ -5,6 +5,7 @@ import { backupService } from "./BackupService";
 
 class BackupScheduler {
   private timerId: number | null = null;
+  private nextScheduledAt: Date | null = null;
   private unsubscribeConnectivity: (() => void) | null = null;
   private started = false;
 
@@ -17,6 +18,7 @@ class BackupScheduler {
     });
     void this.runStartup(context);
     const delay = millisecondsToNextSlot();
+    this.nextScheduledAt = new Date(Date.now() + delay);
     this.timerId = window.setTimeout(() => void this.runScheduled(context), delay);
     runtimeLogger.info("BackupScheduler", "Iniciado.", { nextBackupMinutes: Math.floor(delay / 60_000) });
   }
@@ -24,10 +26,13 @@ class BackupScheduler {
   async stop() {
     if (this.timerId !== null) window.clearTimeout(this.timerId);
     this.timerId = null;
+    this.nextScheduledAt = null;
     this.unsubscribeConnectivity?.(); this.unsubscribeConnectivity = null;
     this.started = false;
     runtimeLogger.info("BackupScheduler", "Detenido.");
   }
+
+  getNextScheduledTime() { return this.nextScheduledAt ? new Date(this.nextScheduledAt) : null; }
 
   private async runStartup(context: RuntimeContext) {
     try {
@@ -45,7 +50,11 @@ class BackupScheduler {
       await this.uploadPending(context);
       await backupService.purgeOldBackups(context.tenantId);
     } catch (error) { runtimeLogger.error("BackupScheduler", "Fallo el backup programado.", error); }
-    if (this.started) this.timerId = window.setTimeout(() => void this.runScheduled(context), 12 * 60 * 60 * 1000);
+    if (this.started) {
+      const delay = 12 * 60 * 60 * 1000;
+      this.nextScheduledAt = new Date(Date.now() + delay);
+      this.timerId = window.setTimeout(() => void this.runScheduled(context), delay);
+    }
   }
 
   private async checkMissedBackup(context: RuntimeContext) {

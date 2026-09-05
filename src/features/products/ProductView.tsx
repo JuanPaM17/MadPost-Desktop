@@ -1,4 +1,4 @@
-import { Badge, Box, Button, Flex, Heading, Input, Stack, Table, Tabs, Text } from "@chakra-ui/react";
+import { Badge, Box, Button, Flex, Heading, Input, Stack, Table, Text } from "@chakra-ui/react";
 import { Check, Pencil, Plus, Power, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { notify } from "../../components/ui/AppToaster";
@@ -9,11 +9,10 @@ import { AdditionsTab } from "./AdditionsTab";
 import { ProductsTab } from "./ProductsTab";
 import { CombosTab } from "./CombosTab";
 import { DiscountsTab } from "./DiscountsTab";
-
-const tabs = ["Productos", "Categorias", "Adiciones", "Salsas", "Combos", "Descuentos"];
+import { AppTabs } from "../../components/ui/AppTabs";
 
 export function ProductView() {
-  return <Tabs.Root defaultValue="Productos" variant="line" fitted={false}><Tabs.List className="tabs-scroll" overflowX="auto" mb="7">{tabs.map((tab) => <Tabs.Trigger key={tab} value={tab}>{tab}</Tabs.Trigger>)}</Tabs.List>{tabs.map((tab) => <Tabs.Content key={tab} value={tab}>{tab === "Productos" ? <ProductsTab /> : tab === "Salsas" ? <SaucesTab /> : tab === "Categorias" ? <CategoriesTab /> : tab === "Adiciones" ? <AdditionsTab /> : tab === "Combos" ? <CombosTab /> : tab === "Descuentos" ? <DiscountsTab /> : <Flex h="360px" align="center" justify="center"><Text color="gray.500" fontSize="lg">{tab}</Text></Flex>}</Tabs.Content>)}</Tabs.Root>;
+  return <AppTabs defaultValue="products" tabs={[{ value: "products", label: "Productos", content: <ProductsTab /> }, { value: "categories", label: "Categorias", content: <CategoriesTab /> }, { value: "additions", label: "Adiciones", content: <AdditionsTab /> }, { value: "sauces", label: "Salsas", content: <SaucesTab /> }, { value: "combos", label: "Combos", content: <CombosTab /> }, { value: "discounts", label: "Descuentos", content: <DiscountsTab /> }]} />;
 }
 
 function SaucesTab() {

@@ -20,7 +20,6 @@ export const FULL_SYNC_TABLES = [
   ["sauces", columns(["id", "tenant_id", "name", "active::bool", "created_at", "updated_at"])],
   ["supplies", columns(["id", "tenant_id", "name", "unit", "stock", "low_stock_threshold", "active::bool", "created_at", "updated_at"])],
   ["product_supplies", columns(["product_id", "supply_id", "quantity_per_sale"])],
-  ["addition_supplies", columns(["addition_id", "supply_id", "quantity_per_sale"])],
   ["combos", columns(["id", "tenant_id", "name", "price", "image_path", "active::bool", "created_at", "updated_at"])],
   ["combo_items", columns(["id", "combo_id", "product_id", "quantity"])],
   ["cash_sessions", columns(["id", "tenant_id", "user_id", "session_number", "opening_amount", "closing_amount", "expected_amount", "status", "opened_at", "closed_at"])],

@@ -16,6 +16,7 @@ const rpcByTable: Record<string, { name: string; parameter: string }> = {
   discounts: { name: "delete_discount", parameter: "p_discount_id" },
   delivery_types: { name: "delete_delivery_type", parameter: "p_delivery_type_id" },
   product_supplies: { name: "delete_product_supplies", parameter: "p_product_id" },
+  supplies: { name: "delete_supply", parameter: "p_supply_id" },
 };
 
 class DeleteSyncService {

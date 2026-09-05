@@ -3,19 +3,21 @@ import { tenantRepository } from "../../infrastructure/sqlite/repositories";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
 import { connectivityMonitor } from "../sync/ConnectivityMonitor";
 import { r2Client } from "./R2Client";
+import type { R2ConnectionCheck } from "./R2Client";
 
 const BACKUP_DIRECTORY = "backups";
 const LOG_DIRECTORY = "logs";
 const BACKUP_PATTERN = /^madpost_backup_(\d{8}_\d{6})\.db$/;
 
 export type BackupResult = { fileName: string | null; uploadedToR2: boolean; error: string | null };
+export type BackupEntry = { fileName: string; createdAt: Date; isLocal: boolean; isRemote: boolean };
 
 class BackupService {
   async createBackup(tenantId: string): Promise<BackupResult> {
     let fileName: string;
     try { fileName = await this.createLocalBackup(); }
     catch (error) { return { fileName: null, uploadedToR2: false, error: `Error creando copia local: ${message(error)}` }; }
-    if (!r2Client.isConfigured() || !connectivityMonitor.isOnline()) return { fileName, uploadedToR2: false, error: null };
+    if (!connectivityMonitor.isOnline() || !(await r2Client.isConfigured())) return { fileName, uploadedToR2: false, error: null };
     try { await this.uploadBackup(tenantId, fileName); return { fileName, uploadedToR2: true, error: null }; }
     catch (error) { return { fileName, uploadedToR2: false, error: `Copia guardada localmente: ${message(error)}` }; }
   }
@@ -29,14 +31,14 @@ class BackupService {
   }
 
   async uploadPendingBackups(tenantId: string) {
-    if (!r2Client.isConfigured() || !connectivityMonitor.isOnline()) return;
+    if (!(await r2Client.isConfigured()) || !connectivityMonitor.isOnline()) return;
     const prefix = await this.backupPrefix(tenantId); if (!prefix) return;
     const remoteNames = new Set((await r2Client.listObjects(prefix)).map((item) => item.key.split("/").pop()));
     for (const fileName of await this.listBackupNames()) if (!remoteNames.has(fileName)) await this.uploadBackup(tenantId, fileName);
   }
 
   async uploadPendingLogs(tenantId: string) {
-    if (import.meta.env.DEV || !r2Client.isConfigured() || !connectivityMonitor.isOnline()) return;
+    if (import.meta.env.DEV || !(await r2Client.isConfigured()) || !connectivityMonitor.isOnline()) return;
     const slug = await this.getTenantSlug(tenantId); if (!slug) return;
     const prefix = `${slug}/prd/logs/`;
     const remote = new Map((await r2Client.listObjects(prefix)).map((item) => [item.key.split("/").pop(), item.size]));
@@ -56,13 +58,44 @@ class BackupService {
       const timestamp = backupTimestamp(fileName);
       if (timestamp && timestamp.getTime() < cutoff) { await remove(`${BACKUP_DIRECTORY}/${fileName}`, { baseDir: BaseDirectory.AppData }); runtimeLogger.info("BackupService", "Backup local eliminado por antiguedad.", { fileName }); }
     }
-    if (!r2Client.isConfigured() || !connectivityMonitor.isOnline()) return;
+    if (!(await r2Client.isConfigured()) || !connectivityMonitor.isOnline()) return;
     const slug = await this.getTenantSlug(tenantId); if (!slug) return;
     for (const prefix of [`${slug}/${environmentName()}/backups/`, `${slug}/${environmentName()}/logs/`]) for (const object of await r2Client.listObjects(prefix)) if (object.lastModified.getTime() < cutoff) await r2Client.deleteObject(object.key);
   }
 
   async hasBackups() { return (await this.listBackupNames()).length > 0; }
   async latestBackupTime() { const dates = (await this.listBackupNames()).map(backupTimestamp).filter((value): value is Date => Boolean(value)); return dates.sort((a, b) => b.getTime() - a.getTime())[0] ?? null; }
+  async isR2Configured() { return r2Client.isConfigured(); }
+
+  async checkR2Connection(): Promise<R2ConnectionCheck> {
+    const result = await r2Client.testConnection();
+    if (result.connected) runtimeLogger.info("BackupService", "Conexion R2 verificada.", { endpoint: result.endpoint, bucket: result.bucket });
+    else runtimeLogger.info("BackupService", "Conexion R2 no disponible.", { endpoint: result.endpoint, bucket: result.bucket, missing: result.missing.join(",") || undefined, reason: result.reason });
+    return result;
+  }
+
+  async listAllBackups(tenantId: string): Promise<BackupEntry[]> {
+    const entries = new Map<string, BackupEntry>();
+    for (const fileName of await this.listBackupNames()) {
+      const createdAt = backupTimestamp(fileName);
+      if (createdAt) entries.set(fileName, { fileName, createdAt, isLocal: true, isRemote: false });
+    }
+    if ((await r2Client.isConfigured()) && connectivityMonitor.isOnline()) {
+      try {
+        const prefix = await this.backupPrefix(tenantId);
+        if (prefix) for (const object of await r2Client.listObjects(prefix)) {
+          const fileName = object.key.split("/").pop() ?? "";
+          const createdAt = backupTimestamp(fileName);
+          if (!createdAt) continue;
+          const current = entries.get(fileName);
+          entries.set(fileName, current ? { ...current, isRemote: true } : { fileName, createdAt, isLocal: false, isRemote: true });
+        }
+      } catch (error) {
+        runtimeLogger.error("BackupService", "No fue posible consultar el historial remoto de backups.", error);
+      }
+    }
+    return [...entries.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+  }
 
   private async uploadBackup(tenantId: string, fileName: string) {
     const prefix = await this.backupPrefix(tenantId); if (!prefix) throw new Error("Tenant slug no disponible.");

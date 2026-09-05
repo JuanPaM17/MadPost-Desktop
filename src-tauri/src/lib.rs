@@ -1,16 +1,19 @@
 mod backup_cli;
+mod r2_native;
 mod mobile_api;
 mod update_installer;
 use serde::Serialize;
 use std::{env, fs, process::Command};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, publish_mdns, unpublish_mdns, install_update, open_help_url])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -29,6 +32,8 @@ fn start_mobile_api(state: tauri::State<'_, mobile_api::MobileRuntimeState>, ten
 
 #[tauri::command]
 fn stop_mobile_api(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::NativeResult { mobile_api::stop_api(&state) }
+#[tauri::command]
+fn mobile_api_status(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::MobileApiStatus { mobile_api::api_status(&state) }
 
 #[tauri::command]
 fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_id: String, tenant_name: String) -> mobile_api::NativeResult {
@@ -48,6 +53,55 @@ fn open_help_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) { return Err("La URL de ayuda no es valida".to_string()); }
     Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", &url]).spawn().map(|_| ()).map_err(|error| error.to_string())
 }
+
+#[tauri::command]
+fn save_export_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("No se selecciono un archivo de destino.".to_string());
+    }
+    fs::write(path, bytes).map_err(|error| format!("No fue posible guardar el archivo: {error}"))
+}
+
+#[tauri::command]
+fn list_printers() -> Result<Vec<String>, String> {
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", "Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name"])
+        .output()
+        .map_err(|error| format!("No fue posible consultar las impresoras: {error}"))?;
+    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
+    let virtual_printers = ["microsoft print to pdf", "microsoft xps document writer", "onenote", "fax", "adobe pdf", "cutepdf", "bullzip", "dopdf", "pdfcreator", "pdf24", "nitro pdf", "foxit pdf"];
+    Ok(String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|name| !name.is_empty()).filter(|name| { let normalized = name.to_lowercase(); !virtual_printers.iter().any(|virtual_name| normalized.contains(virtual_name)) }).map(str::to_string).collect())
+}
+
+#[tauri::command]
+fn store_logo(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
+    let source = std::path::Path::new(&source_path);
+    let extension = source.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+    if !["png", "jpg", "jpeg", "gif"].contains(&extension.as_str()) { return Err("Selecciona una imagen PNG, JPG o GIF.".to_string()); }
+    let logos_dir = app.path().app_data_dir().map_err(|error| error.to_string())?.join("logos");
+    fs::create_dir_all(&logos_dir).map_err(|error| error.to_string())?;
+    let target = logos_dir.join(format!("logo.{extension}"));
+    fs::copy(source, &target).map_err(|error| format!("No fue posible copiar el logo: {error}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_backups_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let directory = app.path().app_data_dir().map_err(|error| error.to_string())?.join("backups");
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Command::new("explorer.exe").arg(directory).spawn().map(|_| ()).map_err(|error| format!("No fue posible abrir la carpeta de copias: {error}"))
+}
+
+#[tauri::command]
+fn r2_configuration() -> r2_native::R2ConnectionCheck { r2_native::configuration_status() }
+#[tauri::command]
+fn r2_test_connection() -> r2_native::R2ConnectionCheck { r2_native::configuration_check() }
+#[tauri::command]
+fn r2_list_objects(prefix: String) -> Result<String, String> { r2_native::list_objects(prefix) }
+#[tauri::command]
+fn r2_put_object(key: String, body: Vec<u8>) -> Result<(), String> { r2_native::put_object(key, body) }
+#[tauri::command]
+fn r2_delete_object(key: String) -> Result<(), String> { r2_native::delete_object(key) }
 
 #[derive(Serialize)]
 struct TaskRegistrationResult { skipped: bool, messages: Vec<String> }

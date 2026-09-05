@@ -1,6 +1,8 @@
 import { compare, hash } from "bcryptjs";
 import type { LocalUser, UserRole } from "../../core/types";
-import { recoveryRepository, syncQueueRepository, userRepository } from "../../infrastructure/sqlite/repositories";
+import { pendingDeletesRepository, recoveryRepository, syncQueueRepository, userRepository } from "../../infrastructure/sqlite/repositories";
+import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
+import { auditService } from "../audit/AuditService";
 
 const SUPERADMIN_USERNAME = "juanpamacast";
 const SUPERADMIN_PASSWORD = "1039700598";
@@ -29,12 +31,14 @@ class AuthService {
     };
     await userRepository.insert(user);
     await syncQueueRepository.ensureUserInsert(user.id, { ...user, password_hash: undefined });
+    await auditService.log("CREAR_USUARIO", "USUARIOS", `Usuario: ${user.username}`, user.id);
     return user;
   }
 
   async generateRecoveryCode(userId: string) {
     const code = `MADP-${randomBlock()}-${randomBlock()}-${randomBlock()}`;
     await recoveryRepository.save(userId, await hash(code, 12));
+    await auditService.log("RESET_PASSWORD", "USUARIOS", "Codigo de acceso generado", userId);
     return code;
   }
 
@@ -74,6 +78,52 @@ class AuthService {
     const updatedUser = { ...user, username: normalizedUsername, display_name: normalizedName, ...(passwordHash ? { password_hash: passwordHash } : {}) };
     await syncQueueRepository.enqueue("users", user.id, "UPDATE", updatedUser);
     return updatedUser;
+  }
+
+  async listUsers(tenantId: string) {
+    const database = await databaseManager.database();
+    return database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE tenant_id=$1 AND role != 'SUPERADMIN' ORDER BY username COLLATE NOCASE", [tenantId]);
+  }
+
+  async updateUser(user: LocalUser, username: string, displayName: string, role: Extract<UserRole, "ADMIN" | "SELLER">) {
+    const normalizedUsername = username.trim().toLowerCase();
+    if (!normalizedUsername) throw new Error("El usuario es obligatorio.");
+    const existing = await userRepository.findByUsername(user.tenant_id, normalizedUsername);
+    if (existing && existing.id !== user.id) throw new Error("Ese usuario ya existe.");
+    const database = await databaseManager.database(); const now = new Date().toISOString();
+    await database.execute("UPDATE users SET username=$1,display_name=$2,role=$3,updated_at=$4 WHERE id=$5 AND tenant_id=$6", [normalizedUsername, displayName.trim() || null, role, now, user.id, user.tenant_id]);
+    const updated = { ...user, username: normalizedUsername, display_name: displayName.trim() || null, role } as LocalUser;
+    await syncQueueRepository.enqueue("users", user.id, "UPDATE", { id: updated.id, tenant_id: updated.tenant_id, username: updated.username, display_name: updated.display_name, role: updated.role, active: updated.active, updated_at: now });
+    await auditService.log("EDITAR_USUARIO", "USUARIOS", `Usuario: ${updated.username}`, updated.id);
+    return updated;
+  }
+
+  async setUserActive(user: LocalUser, active: boolean) {
+    const database = await databaseManager.database(); const now = new Date().toISOString();
+    await database.execute("UPDATE users SET active=$1,updated_at=$2 WHERE id=$3 AND tenant_id=$4", [active ? 1 : 0, now, user.id, user.tenant_id]);
+    const updated = { ...user, active: active ? 1 : 0 } as LocalUser;
+    await syncQueueRepository.enqueue("users", user.id, "UPDATE", { id: user.id, active, updated_at: now });
+    await auditService.log(active ? "ACTIVAR_USUARIO" : "DESACTIVAR_USUARIO", "USUARIOS", `Usuario: ${user.username}`, user.id);
+    return updated;
+  }
+
+  async deletionCheck(user: LocalUser) {
+    const database = await databaseManager.database();
+    const [cash, tables] = await Promise.all([
+      database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM cash_sessions WHERE user_id=$1 AND status='OPEN'", [user.id]),
+      database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM table_orders WHERE user_id=$1 AND status='OPEN'", [user.id]),
+    ]);
+    const reason = (cash[0]?.total ?? 0) > 0 ? "Tiene caja abierta" : (tables[0]?.total ?? 0) > 0 ? "Tiene mesa abierta" : null;
+    return { canDelete: reason === null, reason };
+  }
+
+  async deleteUser(user: LocalUser) {
+    const database = await databaseManager.database();
+    await recoveryRepository.remove(user.id);
+    await syncQueueRepository.clearForRecord("users", user.id);
+    await database.execute("DELETE FROM users WHERE id=$1 AND tenant_id=$2", [user.id, user.tenant_id]);
+    await pendingDeletesRepository.enqueue("users", user.id);
+    await auditService.log("ELIMINAR_USUARIO", "USUARIOS", `Usuario: ${user.username}`, user.id);
   }
 }
 

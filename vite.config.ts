@@ -15,11 +15,12 @@ export default defineConfig(({ mode }) => {
           environment["supabase.service_role_key"] ??
           environment.VITE_SUPABASE_SERVICE_ROLE_KEY ??
           "",
-        r2Endpoint: environment["r2.endpoint"] ?? "",
-        r2AccessKeyId: environment["r2.access_key_id"] ?? "",
-        r2SecretAccessKey: environment["r2.secret_access_key"] ?? "",
-        r2Bucket: environment["r2.bucket"] ?? "",
-        r2Region: environment["r2.region"] ?? "auto",
+        // R2 is consumed exclusively by the native Rust backend. Never expose its credentials to the webview bundle.
+        r2Endpoint: "",
+        r2AccessKeyId: "",
+        r2SecretAccessKey: "",
+        r2Bucket: "",
+        r2Region: "auto",
         githubRepo: environment["github.repo"] ?? "",
         githubToken: environment["github.token"] ?? "",
         madpostBaseUrl: environment["madpost.base_url"] ?? "https://madpost.bizzify.lat",

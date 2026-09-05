@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{connect_info::ConnectInfo, ws::{WebSocket, WebSocketUpgrade}, State},
     http::{Method, StatusCode},
     response::IntoResponse,
     routing::{get, patch, post},
@@ -7,7 +7,7 @@ use axum::{
 };
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use serde::Serialize;
-use std::{collections::HashMap, net::TcpListener, sync::Mutex};
+use std::{collections::HashMap, net::{SocketAddr, TcpListener, UdpSocket}, sync::{Arc, Mutex}};
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -17,6 +17,7 @@ const API_PORT: u16 = 8765;
 pub struct MobileRuntimeState {
     api: Mutex<Option<ApiHandle>>,
     mdns: Mutex<Option<MdnsHandle>>,
+    clients: Arc<Mutex<HashMap<String, WsClientInfo>>>,
 }
 
 struct ApiHandle { shutdown: oneshot::Sender<()> }
@@ -25,8 +26,13 @@ struct MdnsHandle { daemon: ServiceDaemon, fullname: String }
 #[derive(Serialize)]
 pub struct NativeResult { pub active: bool, pub message: String }
 
+#[derive(Clone, Serialize)]
+pub struct WsClientInfo { pub ip: String, pub connected_at: String }
+#[derive(Serialize)]
+pub struct MobileApiStatus { pub active: bool, pub port: u16, pub local_ip: Option<String>, pub clients: Vec<WsClientInfo> }
+
 #[derive(Clone)]
-struct ApiContext { tenant_id: String, tenant_name: String }
+struct ApiContext { tenant_id: String, tenant_name: String, clients: Arc<Mutex<HashMap<String, WsClientInfo>>> }
 
 pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: String) -> NativeResult {
     let mut api = match state.api.lock() { Ok(value) => value, Err(_) => return NativeResult { active: false, message: "API state lock unavailable".to_string() } };
@@ -39,10 +45,10 @@ pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: Str
         return NativeResult { active: false, message: format!("MadPost API socket setup failed: {error}") };
     }
     let (shutdown, receiver) = oneshot::channel::<()>();
-    let context = ApiContext { tenant_id, tenant_name };
+    let context = ApiContext { tenant_id, tenant_name, clients: Arc::clone(&state.clients) };
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::from_std(listener) { Ok(value) => value, Err(error) => { eprintln!("MadPost API listener conversion failed: {error}"); return; } };
-        if let Err(error) = axum::serve(listener, router(context)).with_graceful_shutdown(async { let _ = receiver.await; }).await {
+        if let Err(error) = axum::serve(listener, router(context).into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async { let _ = receiver.await; }).await {
             eprintln!("MadPost API server error: {error}");
         }
     });
@@ -50,9 +56,16 @@ pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: Str
     NativeResult { active: true, message: format!("MadPost API listening on http://0.0.0.0:{API_PORT}/") }
 }
 
+pub fn api_status(state: &MobileRuntimeState) -> MobileApiStatus {
+    let active = state.api.lock().map(|api| api.is_some()).unwrap_or(false);
+    let mut clients = state.clients.lock().map(|clients| clients.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    clients.sort_by(|left, right| left.ip.cmp(&right.ip));
+    MobileApiStatus { active, port: API_PORT, local_ip: local_ipv4(), clients }
+}
+
 pub fn stop_api(state: &MobileRuntimeState) -> NativeResult {
     let mut api = match state.api.lock() { Ok(value) => value, Err(_) => return NativeResult { active: false, message: "API state lock unavailable".to_string() } };
-    if let Some(handle) = api.take() { let _ = handle.shutdown.send(()); NativeResult { active: false, message: "MadPost API stopped".to_string() } }
+    if let Some(handle) = api.take() { let _ = handle.shutdown.send(()); if let Ok(mut clients) = state.clients.lock() { clients.clear(); } NativeResult { active: false, message: "MadPost API stopped".to_string() } }
     else { NativeResult { active: false, message: "MadPost API was not running".to_string() } }
 }
 
@@ -120,9 +133,27 @@ fn router(context: ApiContext) -> Router {
         .route("/api/v1/tables/{id}/order/comandas/{comanda_id}/reprint", post(not_implemented))
         .route("/api/v1/tables/{id}/order/receipts", get(not_implemented))
         .route("/api/v1/tables/{id}/order/receipts/{sale_id}/print", post(not_implemented))
-        .route("/ws", get(not_implemented))
+        .route("/ws", get(websocket))
         .with_state(context)
         .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE]).allow_headers(Any))
+}
+
+async fn websocket(State(context): State<ApiContext>, ConnectInfo(address): ConnectInfo<SocketAddr>, socket: WebSocketUpgrade) -> impl IntoResponse {
+    socket.on_upgrade(move |socket| websocket_session(socket, context, address))
+}
+
+async fn websocket_session(mut socket: WebSocket, context: ApiContext, address: SocketAddr) {
+    let ip = address.ip().to_string();
+    if let Ok(mut clients) = context.clients.lock() { clients.insert(ip.clone(), WsClientInfo { ip: ip.clone(), connected_at: chrono::Utc::now().to_rfc3339() }); }
+    while socket.recv().await.is_some() {}
+    if let Ok(mut clients) = context.clients.lock() { clients.remove(&ip); }
+}
+
+fn local_ipv4() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let address = socket.local_addr().ok()?.ip();
+    address.is_ipv4().then_some(address.to_string())
 }
 
 async fn ping(State(context): State<ApiContext>) -> Json<serde_json::Value> {

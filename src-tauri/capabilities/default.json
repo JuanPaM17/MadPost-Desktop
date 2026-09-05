@@ -3,5 +3,18 @@
   "identifier": "default",
   "description": "Permisos principales para la aplicacion de escritorio",
   "windows": ["main"],
-  "permissions": ["core:default", "sql:default", "sql:allow-execute", "fs:default"]
+  "permissions": [
+    "core:default",
+    "sql:default",
+    "sql:allow-execute",
+    "fs:default",
+    "fs:allow-copy-file",
+    "fs:allow-mkdir",
+    "fs:allow-read-dir",
+    "fs:allow-read-file",
+    "fs:allow-remove",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "dialog:default"
+  ]
 }

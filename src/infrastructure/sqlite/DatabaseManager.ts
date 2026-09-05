@@ -94,9 +94,6 @@ const migrations = [
   `CREATE TABLE IF NOT EXISTS product_supplies (
     product_id TEXT NOT NULL, supply_id TEXT NOT NULL, quantity_per_sale REAL, PRIMARY KEY(product_id, supply_id)
   )`,
-  `CREATE TABLE IF NOT EXISTS addition_supplies (
-    addition_id TEXT NOT NULL, supply_id TEXT NOT NULL, quantity_per_sale REAL, PRIMARY KEY(addition_id, supply_id)
-  )`,
   `CREATE TABLE IF NOT EXISTS combos (
     id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL, price REAL, image_path TEXT,
     active INTEGER, created_at TEXT, updated_at TEXT
@@ -165,6 +162,13 @@ const migrations = [
     details TEXT,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS mobile_device_aliases (
+    tenant_id TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    alias TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, ip)
+  )`,
   "CREATE INDEX IF NOT EXISTS idx_users_tenant_role ON users(tenant_id, role, active)",
   "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, retry_count, id)",
   "CREATE INDEX IF NOT EXISTS idx_pending_deletes_status ON pending_deletes(status, id)",
@@ -191,6 +195,12 @@ class DatabaseManager {
     await this.ensureColumn(database, "tenants", "last_synced_at", "TEXT");
     await this.ensureColumn(database, "tenants", "invoice_footer", "TEXT");
     await this.ensureColumn(database, "tenants", "max_sauces", "INTEGER");
+    await this.ensureColumn(database, "tenants", "stock_alert_threshold", "REAL");
+    await this.ensureColumn(database, "tenants", "printer_receipt", "TEXT");
+    await this.ensureColumn(database, "tenants", "printer_kitchen", "TEXT");
+    await this.ensureColumn(database, "tenants", "comanda_copies", "INTEGER");
+    await this.ensureColumn(database, "tenants", "delivery_whatsapp", "TEXT");
+    await database.execute("DROP TABLE IF EXISTS addition_supplies");
     return database;
   }
 

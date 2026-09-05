@@ -9,6 +9,9 @@ import { UpdateView } from "../update/UpdateView";
 import { SqlEditorView } from "../developer/SqlEditorView";
 import { AuditView } from "../audit/AuditView";
 import { ProductView } from "../products/ProductView";
+import { InventoryView } from "../inventory/InventoryView";
+import { ConfigView } from "../config/ConfigView";
+import { UsersView } from "../auth/UsersView";
 import { invoke } from "@tauri-apps/api/core";
 import { appConfig } from "../../config/AppConfig";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
@@ -53,7 +56,7 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
         <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} />Cerrar Sesion</Button>
       </Box>
     </Flex>
-    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200"><Heading size="lg">{selectedTitle}</Heading></Flex><Box className="content-scroll" flex="1" overflowY="auto" p="10">{activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "products" ? <ProductView /> : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
+    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200"><Heading size="lg">{selectedTitle}</Heading></Flex><Box className="content-scroll" flex="1" overflowY="auto" p="10">{activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "settings" ? <ConfigView /> : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
   </Flex>;
 }
 
