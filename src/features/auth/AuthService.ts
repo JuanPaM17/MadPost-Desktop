@@ -30,7 +30,7 @@ class AuthService {
       password_hash: await hash(password, 12), display_name: displayName.trim(), role, active: 1,
     };
     await userRepository.insert(user);
-    await syncQueueRepository.ensureUserInsert(user.id, { ...user, password_hash: undefined });
+    await syncQueueRepository.ensureUserInsert(user.id, user);
     await auditService.log("CREAR_USUARIO", "USUARIOS", `Usuario: ${user.username}`, user.id);
     return user;
   }
@@ -62,7 +62,11 @@ class AuthService {
 
   async resetPassword(userId: string, password: string) {
     if (password.length < 4) throw new Error("La contrasena debe tener al menos 4 caracteres.");
-    await userRepository.updatePassword(userId, await hash(password, 12));
+    const passwordHash = await hash(password, 12);
+    await userRepository.updatePassword(userId, passwordHash);
+    const database = await databaseManager.database();
+    const users = await database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE id=$1", [userId]);
+    if (users[0]) await syncQueueRepository.enqueue("users", userId, "UPDATE", userPayload(users[0]));
   }
 
   async updateProfile(user: LocalUser, username: string, displayName: string, password: string | null) {
@@ -76,7 +80,7 @@ class AuthService {
     const passwordHash = password === null ? undefined : await hash(password, 12);
     await userRepository.updateProfile(user.id, normalizedUsername, normalizedName, passwordHash);
     const updatedUser = { ...user, username: normalizedUsername, display_name: normalizedName, ...(passwordHash ? { password_hash: passwordHash } : {}) };
-    await syncQueueRepository.enqueue("users", user.id, "UPDATE", updatedUser);
+    await syncQueueRepository.enqueue("users", user.id, "UPDATE", userPayload(updatedUser));
     return updatedUser;
   }
 
@@ -93,7 +97,7 @@ class AuthService {
     const database = await databaseManager.database(); const now = new Date().toISOString();
     await database.execute("UPDATE users SET username=$1,display_name=$2,role=$3,updated_at=$4 WHERE id=$5 AND tenant_id=$6", [normalizedUsername, displayName.trim() || null, role, now, user.id, user.tenant_id]);
     const updated = { ...user, username: normalizedUsername, display_name: displayName.trim() || null, role } as LocalUser;
-    await syncQueueRepository.enqueue("users", user.id, "UPDATE", { id: updated.id, tenant_id: updated.tenant_id, username: updated.username, display_name: updated.display_name, role: updated.role, active: updated.active, updated_at: now });
+    await syncQueueRepository.enqueue("users", user.id, "UPDATE", userPayload(updated, now));
     await auditService.log("EDITAR_USUARIO", "USUARIOS", `Usuario: ${updated.username}`, updated.id);
     return updated;
   }
@@ -102,7 +106,7 @@ class AuthService {
     const database = await databaseManager.database(); const now = new Date().toISOString();
     await database.execute("UPDATE users SET active=$1,updated_at=$2 WHERE id=$3 AND tenant_id=$4", [active ? 1 : 0, now, user.id, user.tenant_id]);
     const updated = { ...user, active: active ? 1 : 0 } as LocalUser;
-    await syncQueueRepository.enqueue("users", user.id, "UPDATE", { id: user.id, active, updated_at: now });
+    await syncQueueRepository.enqueue("users", user.id, "UPDATE", userPayload(updated, now));
     await auditService.log(active ? "ACTIVAR_USUARIO" : "DESACTIVAR_USUARIO", "USUARIOS", `Usuario: ${user.username}`, user.id);
     return updated;
   }
@@ -136,11 +140,15 @@ export async function ensureSuperAdmin(tenantId: string) {
     };
     await userRepository.insert(user);
   }
-  await syncQueueRepository.ensureUserInsert(user.id, { ...user, password_hash: undefined });
+  await syncQueueRepository.ensureUserInsert(user.id, user);
 }
 
 function randomBlock() {
   return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+function userPayload(user: LocalUser, updatedAt = new Date().toISOString()) {
+  return { id: user.id, tenant_id: user.tenant_id, username: user.username, password_hash: user.password_hash, display_name: user.display_name, role: user.role, active: user.active === 1, updated_at: updatedAt };
 }
 
 export const authService = new AuthService();

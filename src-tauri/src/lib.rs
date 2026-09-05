@@ -13,7 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -60,6 +60,90 @@ fn save_export_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
         return Err("No se selecciono un archivo de destino.".to_string());
     }
     fs::write(path, bytes).map_err(|error| format!("No fue posible guardar el archivo: {error}"))
+}
+
+#[tauri::command]
+fn save_and_open_cash_close_pdf(app: tauri::AppHandle, file_name: String, bytes: Vec<u8>) -> Result<String, String> {
+    if !file_name.starts_with("cierre-caja-") || !file_name.ends_with(".pdf") || file_name.contains(['/', '\\']) {
+        return Err("El nombre del reporte no es valido.".to_string());
+    }
+    let directory = app.path().app_data_dir().map_err(|error| error.to_string())?.join("cierres");
+    fs::create_dir_all(&directory).map_err(|error| format!("No fue posible crear la carpeta de cierres: {error}"))?;
+    let target = directory.join(&file_name);
+    fs::write(&target, bytes).map_err(|error| format!("No fue posible guardar el PDF: {error}"))?;
+    Command::new("explorer.exe").arg(&target).spawn().map_err(|error| format!("No fue posible abrir el PDF: {error}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn save_and_open_invoice_pdf(app: tauri::AppHandle, session_number: u32, file_name: String, bytes: Vec<u8>) -> Result<String, String> {
+    if !file_name.ends_with(".pdf") || file_name.contains(['/', '\\']) {
+        return Err("El nombre de la factura no es valido.".to_string());
+    }
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?.join("facturas").join(format!("caja-{session_number}"));
+    fs::create_dir_all(&directory).map_err(|e| format!("No fue posible crear la carpeta de facturas: {e}"))?;
+    let target = directory.join(&file_name);
+    fs::write(&target, bytes).map_err(|e| format!("No fue posible guardar la factura: {e}"))?;
+    Command::new("explorer.exe").arg(&target).spawn().map_err(|e| format!("No fue posible abrir la factura: {e}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_cash_drawer(printer_name: String) -> Result<(), String> {
+    // ESC/POS pulse drawer pin 2: ESC p m t1 t2
+    let pulse: &[u8] = &[0x1B, 0x70, 0x00, 0x19, 0xFA];
+    send_raw_to_printer(&printer_name, pulse)
+}
+
+fn send_raw_to_printer(printer_name: &str, data: &[u8]) -> Result<(), String> {
+    use std::ffi::CString;
+    use std::ptr;
+
+    #[allow(non_camel_case_types)]
+    type HANDLE = *mut std::ffi::c_void;
+    #[allow(non_camel_case_types)]
+    type BOOL = i32;
+    #[allow(non_camel_case_types)]
+    type DWORD = u32;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct DOC_INFO_1A {
+        pDocName: *const i8,
+        pOutputFile: *const i8,
+        pDatatype: *const i8,
+    }
+
+    #[link(name = "winspool", kind = "dylib")]
+    extern "system" {
+        fn OpenPrinterA(name: *const i8, handle: *mut HANDLE, defaults: *mut std::ffi::c_void) -> BOOL;
+        fn StartDocPrinterA(handle: HANDLE, level: DWORD, info: *const DOC_INFO_1A) -> DWORD;
+        fn StartPagePrinter(handle: HANDLE) -> BOOL;
+        fn WritePrinter(handle: HANDLE, buf: *const std::ffi::c_void, count: DWORD, written: *mut DWORD) -> BOOL;
+        fn EndPagePrinter(handle: HANDLE) -> BOOL;
+        fn EndDocPrinter(handle: HANDLE) -> BOOL;
+        fn ClosePrinter(handle: HANDLE) -> BOOL;
+    }
+
+    let name_c = CString::new(printer_name).map_err(|e| e.to_string())?;
+    let doc_name = CString::new("ESC/POS").unwrap();
+    let datatype = CString::new("RAW").unwrap();
+
+    unsafe {
+        let mut handle: HANDLE = ptr::null_mut();
+        if OpenPrinterA(name_c.as_ptr(), &mut handle, ptr::null_mut()) == 0 {
+            return Err(format!("No se pudo abrir la impresora '{printer_name}'"));
+        }
+        let doc = DOC_INFO_1A { pDocName: doc_name.as_ptr(), pOutputFile: ptr::null(), pDatatype: datatype.as_ptr() };
+        if StartDocPrinterA(handle, 1, &doc) == 0 { ClosePrinter(handle); return Err("StartDocPrinter fallo".into()); }
+        if StartPagePrinter(handle) == 0 { EndDocPrinter(handle); ClosePrinter(handle); return Err("StartPagePrinter fallo".into()); }
+        let mut written: DWORD = 0;
+        WritePrinter(handle, data.as_ptr() as *const _, data.len() as DWORD, &mut written);
+        EndPagePrinter(handle);
+        EndDocPrinter(handle);
+        ClosePrinter(handle);
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -153,12 +153,20 @@ export const syncQueueRepository = {
     const license = await licenseRepository.getValid();
     if (!license?.sync_enabled) return false;
     const database = await databaseManager.database();
-    const exists = await database.select<{ id: number }[]>(
-      "SELECT id FROM sync_queue WHERE table_name = 'users' AND record_id = $1 AND action = 'INSERT' LIMIT 1",
+    const entries = await database.select<{ id: number; synced_at: string | null }[]>(
+      "SELECT id, synced_at FROM sync_queue WHERE table_name = 'users' AND record_id = $1 AND action = 'INSERT' ORDER BY id DESC LIMIT 1",
       [entityId],
     );
-    if (exists[0]) return true;
+    if (entries[0]?.synced_at) return true;
+    if (entries[0]) {
+      await database.execute("UPDATE sync_queue SET payload_json=$1, retry_count=0 WHERE id=$2", [JSON.stringify(payload), entries[0].id]);
+      return true;
+    }
     return this.enqueue("users", entityId, "INSERT", payload);
+  },
+  async replacePendingPayload(id: number, payload: unknown, resetRetries = false) {
+    const database = await databaseManager.database();
+    await database.execute(`UPDATE sync_queue SET payload_json=$1${resetRetries ? ", retry_count=0" : ""} WHERE id=$2 AND synced_at IS NULL`, [JSON.stringify(payload), id]);
   },
   async loadPending(limit = 50) {
     const database = await databaseManager.database();
@@ -219,3 +227,24 @@ export const pendingDeletesRepository = {
 export type PendingDeleteEntry = { id: number; table_name: string; record_id: string; attempts: number };
 
 export type NewUser = Omit<LocalUser, "active" | "password_hash"> & { password_hash: string; role: UserRole };
+
+export const quickLinksRepository = {
+  async load(userId: string): Promise<string[]> {
+    const database = await databaseManager.database();
+    const rows = await database.select<{ view_id: string }[]>(
+      "SELECT view_id FROM user_quick_links WHERE user_id=$1 ORDER BY sort_order",
+      [userId],
+    );
+    return rows.map((r) => r.view_id);
+  },
+  async save(userId: string, viewIds: string[]): Promise<void> {
+    const database = await databaseManager.database();
+    await database.execute("DELETE FROM user_quick_links WHERE user_id=$1", [userId]);
+    for (let i = 0; i < viewIds.length; i++) {
+      await database.execute(
+        "INSERT INTO user_quick_links(user_id, view_id, sort_order) VALUES($1,$2,$3)",
+        [userId, viewIds[i], i],
+      );
+    }
+  },
+};

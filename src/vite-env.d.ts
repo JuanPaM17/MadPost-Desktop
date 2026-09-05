@@ -15,3 +15,7 @@ declare const __MADPOST_ENV__: {
 };
 
 declare const __MADPOST_VERSION__: string;
+
+declare module "qrcode" {
+  function toDataURL(text: string, options?: object): Promise<string>;
+}

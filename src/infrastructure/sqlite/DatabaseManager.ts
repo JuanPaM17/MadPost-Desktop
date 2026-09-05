@@ -169,6 +169,12 @@ const migrations = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, ip)
   )`,
+  `CREATE TABLE IF NOT EXISTS user_quick_links (
+    user_id TEXT NOT NULL,
+    view_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, view_id)
+  )`,
   "CREATE INDEX IF NOT EXISTS idx_users_tenant_role ON users(tenant_id, role, active)",
   "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, retry_count, id)",
   "CREATE INDEX IF NOT EXISTS idx_pending_deletes_status ON pending_deletes(status, id)",

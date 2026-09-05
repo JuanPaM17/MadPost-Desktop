@@ -1,4 +1,5 @@
 import { syncQueueRepository, tenantRepository, type SyncQueueEntry } from "../../infrastructure/sqlite/repositories";
+import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { supabaseConnection } from "../../infrastructure/supabase/SupabaseClient";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
 import { connectivityMonitor } from "./ConnectivityMonitor";
@@ -48,6 +49,7 @@ class SyncService {
   }
 
   private async processSyncQueue(tenantId: string) {
+    await this.repairFailedUserInserts();
     const entries = await syncQueueRepository.loadPending(50);
     if (!entries.length) return;
     let synced = 0;
@@ -57,6 +59,7 @@ class SyncService {
         await this.pushEntry(entry);
         await syncQueueRepository.markSynced(entry.id, new Date().toISOString());
         synced += 1;
+        runtimeLogger.info("SyncService", "Entrada sincronizada.", { queueId: entry.id, table: entry.table_name, recordId: entry.record_id, action: entry.action });
       } catch (error) {
         await syncQueueRepository.incrementRetry(entry.id);
         runtimeLogger.error("SyncService", `Fallo la entrada id=${entry.id} tabla=${entry.table_name} accion=${entry.action}.`, error);
@@ -78,10 +81,27 @@ class SyncService {
     catch { throw new Error("payload_json invalido"); }
     if (!payload || Array.isArray(payload)) throw new Error("payload_json debe ser un objeto JSON");
     const client = supabaseConnection.getClient();
-    const { error } = entry.action === "INSERT"
-      ? await client.from(entry.table_name).upsert(payload)
-      : await client.from(entry.table_name).update(payload).eq("id", entry.record_id);
+    const upsert = entry.action === "INSERT" || entry.table_name === "cash_sessions" || entry.table_name === "users";
+    const { data, error } = upsert
+      ? await client.from(entry.table_name).upsert(payload).select("id")
+      : await client.from(entry.table_name).update(payload).eq("id", entry.record_id).select("id");
     if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("Supabase no confirmo ningun registro afectado.");
+  }
+
+  private async repairFailedUserInserts() {
+    const database = await databaseManager.database();
+    const entries = await database.select<{ id: number; record_id: string; payload_json: string }[]>("SELECT id, record_id, payload_json FROM sync_queue WHERE table_name='users' AND action='INSERT' AND synced_at IS NULL");
+    for (const entry of entries) {
+      let payload: Record<string, unknown>;
+      try { payload = JSON.parse(entry.payload_json) as Record<string, unknown>; } catch { continue; }
+      if (typeof payload.password_hash === "string" && payload.password_hash) continue;
+      const users = await database.select<{ id: string; tenant_id: string; username: string; password_hash: string; display_name: string | null; role: string; active: number }[]>("SELECT id, tenant_id, username, password_hash, display_name, role, active FROM users WHERE id=$1", [entry.record_id]);
+      const user = users[0];
+      if (!user) continue;
+      await syncQueueRepository.replacePendingPayload(entry.id, { ...payload, id: user.id, tenant_id: user.tenant_id, username: user.username, password_hash: user.password_hash, display_name: user.display_name, role: user.role, active: user.active }, true);
+      runtimeLogger.info("SyncService", "Entrada de usuario reparada para sincronizacion.", { userId: user.id, queueId: entry.id });
+    }
   }
 
   private async updateLastSyncedAt(tenantId: string) {

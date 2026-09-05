@@ -46,7 +46,7 @@ export function SqlEditorView() {
     } catch (error) { setStatus({ message: `Error: ${error instanceof Error ? error.message : String(error)}`, error: true }); }
   }
 
-  function queryTable(table: string, count = false) { const query = count ? `SELECT COUNT(*) AS total FROM ${quoteIdentifier(table)};` : `SELECT * FROM ${quoteIdentifier(table)} LIMIT 100;`; setSql(query); void runQuery(query); }
+  function queryTable(table: string, count = false) { const query = count ? `SELECT COUNT(*) AS total FROM ${quoteIdentifier(table)};` : `SELECT * FROM ${quoteIdentifier(table)} ORDER BY rowid DESC LIMIT 100;`; setSql(query); void runQuery(query); }
   function clear() { setSql(""); setColumns([]); setRows([]); setStatus(null); editorRef.current?.focus(); }
   async function copyResults() { if (!columns.length) return; await copyText([columns.join("\t"), ...rows.map((row) => columns.map((column) => formatValue(row[column])).join("\t"))].join("\n")); setStatus({ message: "Resultados copiados al portapapeles.", error: false }); }
   const visibleTables = tables.filter((table) => table.toLowerCase().includes(filter.toLowerCase()));
