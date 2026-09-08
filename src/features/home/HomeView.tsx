@@ -1,26 +1,11 @@
 import { Box, Button, Flex, Grid, Heading, Spinner, Text } from "@chakra-ui/react";
-import { AlertTriangle, Package, Pencil, Table2, ShoppingCart, TrendingUp, WalletCards, X, Check } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { AlertTriangle, Package, Pencil, ShoppingCart, Table2, TrendingUp, WalletCards, X, Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { sessionContext } from "../../core/session/SessionContext";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { quickLinksRepository } from "../../infrastructure/sqlite/repositories";
-
-// ---------------------------------------------------------------------------
-// Opciones configurables (NO incluye las hardcodeadas: pos, cash, products, tables, inventory-admin)
-// ---------------------------------------------------------------------------
-type QuickLinkOption = { id: string; label: string; icon: LucideIcon; adminOnly?: boolean; superAdminOrDev?: boolean };
-
-const CONFIGURABLE_OPTIONS: QuickLinkOption[] = [
-  { id: "history",    label: "Historial",      icon: TrendingUp },
-  { id: "statistics", label: "Estadisticas",   icon: TrendingUp, adminOnly: true },
-  { id: "audit",      label: "Auditoria",      icon: TrendingUp, adminOnly: true },
-  { id: "users",      label: "Usuarios",       icon: TrendingUp, adminOnly: true },
-  { id: "settings",   label: "Configuracion",  icon: TrendingUp, adminOnly: true },
-  { id: "updates",    label: "Actualizaciones", icon: TrendingUp },
-  { id: "sql-editor", label: "SQL Editor",     icon: TrendingUp, superAdminOrDev: true },
-];
+import { MENU_ITEMS } from "../main/menuConfig";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -31,6 +16,8 @@ type HomeData = {
   todayTotal: number;
   activeProducts: number;
   lowStockCount: number;
+  activeTables: number;
+  openOrders: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -44,12 +31,14 @@ async function loadHomeData(tenantId: string, cashSessionId: string | null, isAd
   today.setHours(0, 0, 0, 0);
   const todayIso = today.toISOString();
 
-  const [productsRow, lowStockRow] = await Promise.all([
+  const [productsRow, lowStockRow, tablesRow, ordersRow] = await Promise.all([
     database.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM products WHERE tenant_id=$1 AND active=1", [tenantId]),
     database.select<{ count: number }[]>(
       "SELECT COUNT(*) AS count FROM supplies WHERE tenant_id=$1 AND stock IS NOT NULL AND low_stock_threshold IS NOT NULL AND stock <= low_stock_threshold",
       [tenantId],
     ),
+    database.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM restaurant_tables WHERE tenant_id=$1 AND active=1 AND type='TABLE'", [tenantId]),
+    database.select<{ count: number }[]>("SELECT COUNT(*) AS count FROM table_orders WHERE tenant_id=$1 AND status='OPEN'", [tenantId]),
   ]);
 
   let todaySales = 0;
@@ -69,6 +58,8 @@ async function loadHomeData(tenantId: string, cashSessionId: string | null, isAd
     todayTotal,
     activeProducts: Number(productsRow[0]?.count ?? 0),
     lowStockCount: Number(lowStockRow[0]?.count ?? 0),
+    activeTables: Number(tablesRow[0]?.count ?? 0),
+    openOrders: Number(ordersRow[0]?.count ?? 0),
   };
 }
 
@@ -99,10 +90,12 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
 
   const userName = session?.user.display_name || session?.user.username || "";
 
-  // Opciones disponibles para este usuario
-  const availableOptions = CONFIGURABLE_OPTIONS.filter((opt) => {
-    if (opt.superAdminOrDev) return isSuperAdminOrDev;
-    if (opt.adminOnly) return isAdmin;
+  // Opciones configurables: excluye las hardcodeadas como acceso directo y filtra por rol
+  const availableOptions = MENU_ITEMS.filter((item) => {
+    if (item.homeOnly) return false;
+    if (item.id === "home") return false;
+    if (item.superAdminOrDev) return isSuperAdminOrDev;
+    if (item.adminOnly) return isAdmin;
     return true;
   });
 
@@ -151,6 +144,15 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               subtitle="Productos disponibles para venta"
               action="Ver Productos"
               onAction={() => onNavigate("products")}
+            />
+            <StatCard
+              icon={<Table2 size={16} />}
+              color="teal"
+              title="Mesas"
+              value={`${data?.activeTables ?? 0} mesas`}
+              subtitle={data?.openOrders ? `${data.openOrders} con orden abierta` : "Sin ordenes activas"}
+              action="Ver Mesas"
+              onAction={() => onNavigate("tables")}
             />
             {isAdmin ? (
               <StatCard
@@ -268,6 +270,7 @@ function StatCard({ icon, color, title, value, subtitle, action, onAction }: {
     purple: { bg: "purple.50", iconBg: "purple.100", iconColor: "#7c3aed" },
     blue:   { bg: "blue.50",   iconBg: "blue.100",   iconColor: "#2563eb" },
     red:    { bg: "red.50",    iconBg: "red.100",    iconColor: "#dc2626" },
+    teal:   { bg: "teal.50",  iconBg: "teal.100",   iconColor: "#0f766e" },
   };
   const c = colors[color] ?? colors.blue;
   return (

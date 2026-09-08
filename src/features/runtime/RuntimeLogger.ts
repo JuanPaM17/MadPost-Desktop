@@ -9,7 +9,6 @@ class RuntimeLogger {
       .map(([key, value]) => `${key}=${String(value)}`)
       .join(" ");
     const line = `[${new Date().toISOString()}] [${service}] ${message}${renderedDetails ? ` ${renderedDetails}` : ""}`;
-    console.info(line);
     void this.persist(line);
   }
 

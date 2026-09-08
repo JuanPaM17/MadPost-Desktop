@@ -131,7 +131,7 @@ const migrations = [
   )`,
   `CREATE TABLE IF NOT EXISTS table_orders (
     id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, table_id TEXT, user_id TEXT, cash_session_id TEXT, client_name TEXT,
-    status TEXT, opened_at TEXT, closed_at TEXT, notes TEXT, customer_notes TEXT
+    status TEXT, opened_at TEXT, closed_at TEXT, notes TEXT, customer_notes TEXT, comanda_sent INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS table_order_clients (
     id TEXT PRIMARY KEY, table_order_id TEXT NOT NULL, client_name TEXT, client_number INTEGER, status TEXT, created_at TEXT, delivery_type_id TEXT
@@ -206,6 +206,9 @@ class DatabaseManager {
     await this.ensureColumn(database, "tenants", "printer_kitchen", "TEXT");
     await this.ensureColumn(database, "tenants", "comanda_copies", "INTEGER");
     await this.ensureColumn(database, "tenants", "delivery_whatsapp", "TEXT");
+    await this.ensureColumn(database, "table_order_clients", "notes", "TEXT");
+    await this.ensureColumn(database, "table_order_clients", "is_card", "INTEGER");
+    await this.ensureColumn(database, "table_orders", "comanda_sent", "INTEGER");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     return database;
   }

@@ -28,6 +28,8 @@ export type SaleRequest = {
   cashAmount?: number;
   cardAmount?: number;
   notes?: string;
+  clientName?: string;
+  tableOrderId?: string;
   delivery?: {
     type: DeliveryType;
     paymentMethod: SalePaymentMethod;
@@ -188,6 +190,9 @@ class SaleService {
     const cashAmount = req.paymentMethod === "SPLIT" ? (req.cashAmount ?? null) : null;
     const cardAmount = req.paymentMethod === "SPLIT" ? (req.cardAmount ?? null) : null;
 
+    const clientName = req.clientName ?? null;
+    const tableOrderId = req.tableOrderId ?? null;
+
     // Step 1: INSERT sale
     await database.execute(
       `INSERT INTO sales(
@@ -201,18 +206,19 @@ class SaleService {
       ) VALUES (
         $1,$2,$3,$4,$5,$6,
         $7,$8,$9,$10,$11,
-        $12,NULL,$13,$14,
-        NULL,NULL,$15,
-        $16,NULL,
+        $12,$13,$14,$15,
+        NULL,NULL,$16,
         $17,$18,
-        $19,$20
+        $19,$20,
+        $21,$22
       )`,
       [
         saleId, tenantId, userId, req.cash.id, req.total, req.paymentMethod,
         cashGiven, changeGiven, invoiceNumber, req.notes ?? null, createdAt,
-        isDelivery ? 1 : 0, cashAmount, cardAmount,
-        req.total, // subtotal = total (sin descuento a nivel de venta)
+        isDelivery ? 1 : 0, tableOrderId, cashAmount, cardAmount,
+        req.total,
         deliveryPrice,
+        clientName,
         userId, userName,
         req.delivery?.type.id ?? null, req.delivery?.type.name ?? null,
       ],
@@ -224,10 +230,10 @@ class SaleService {
       total: req.total, payment_method: req.paymentMethod,
       cash_given: cashGiven, change_given: changeGiven, invoice_number: invoiceNumber,
       notes: req.notes ?? null, created_at: createdAt,
-      is_delivery: isDelivery ? 1 : 0, table_order_id: null,
+      is_delivery: isDelivery ? 1 : 0, table_order_id: tableOrderId,
       cash_amount: cashAmount, card_amount: cardAmount,
       discount_type: null, discount_value: null, subtotal: req.total,
-      delivery_price: deliveryPrice ?? 0, client_name: null,
+      delivery_price: deliveryPrice ?? 0, client_name: clientName,
       collected_by_user_id: userId, collected_by_display_name: userName,
       delivery_type_id: req.delivery?.type.id ?? null,
       delivery_type_name: req.delivery?.type.name ?? null,
@@ -342,6 +348,71 @@ class SaleService {
     }
   }
 
+  async updateSalePaymentAndMeta(
+    saleId: string,
+    invoiceNumber: string,
+    sessionNumber: number,
+    original: {
+      paymentMethod: SalePaymentMethod;
+      cashGiven: number | null;
+      changeGiven: number | null;
+      cashAmount: number | null;
+      cardAmount: number | null;
+      notes: string | null;
+      clientName: string | null;
+    },
+    updated: {
+      paymentMethod: SalePaymentMethod;
+      cashGiven: number | null;
+      changeGiven: number | null;
+      cashAmount: number | null;
+      cardAmount: number | null;
+      notes: string | null;
+      clientName: string | null;
+    },
+  ): Promise<boolean> {
+    // Compare — if nothing changed, skip
+    const changed: string[] = [];
+    if (original.paymentMethod !== updated.paymentMethod) changed.push(`Pago: ${payLabel(original.paymentMethod)} → ${payLabel(updated.paymentMethod)}`);
+    if ((original.cashGiven ?? null) !== (updated.cashGiven ?? null)) changed.push(`Recibido: ${original.cashGiven ?? "-"} → ${updated.cashGiven ?? "-"}`);
+    if ((original.changeGiven ?? null) !== (updated.changeGiven ?? null)) changed.push(`Cambio: ${original.changeGiven ?? "-"} → ${updated.changeGiven ?? "-"}`);
+    if ((original.cashAmount ?? null) !== (updated.cashAmount ?? null)) changed.push(`Efectivo: ${original.cashAmount ?? "-"} → ${updated.cashAmount ?? "-"}`);
+    if ((original.cardAmount ?? null) !== (updated.cardAmount ?? null)) changed.push(`Tarjeta: ${original.cardAmount ?? "-"} → ${updated.cardAmount ?? "-"}`);
+    if ((original.notes ?? "") !== (updated.notes ?? "")) changed.push(`Nota: "${original.notes ?? ""}" → "${updated.notes ?? ""}"`);
+    if ((original.clientName ?? "") !== (updated.clientName ?? "")) changed.push(`Cliente: "${original.clientName ?? ""}" → "${updated.clientName ?? ""}"`);
+    if (changed.length === 0) return false;
+
+    const database = await databaseManager.database();
+    await database.execute(
+      `UPDATE sales SET payment_method=$1, cash_given=$2, change_given=$3, cash_amount=$4, card_amount=$5, notes=$6, client_name=$7 WHERE id=$8`,
+      [updated.paymentMethod, updated.cashGiven, updated.changeGiven, updated.cashAmount, updated.cardAmount, updated.notes, updated.clientName, saleId],
+    );
+
+    await syncQueueRepository.enqueue("sales", saleId, "UPDATE", {
+      id: saleId,
+      payment_method: updated.paymentMethod,
+      cash_given: updated.cashGiven,
+      change_given: updated.changeGiven,
+      cash_amount: updated.cashAmount,
+      card_amount: updated.cardAmount,
+      notes: updated.notes,
+      client_name: updated.clientName,
+    });
+
+    const { auditService } = await import("../audit/AuditService");
+    await auditService.log("EDITAR_VENTA", "VENTA", `Factura #${invoiceNumber} | ${changed.join(" | ")}`, saleId);
+
+    // Delete cached PDF so next "Ver PDF" regenerates with updated data
+    try {
+      const { remove, exists: fsExists } = await import("@tauri-apps/plugin-fs");
+      const pdfPath = `facturas/caja-${sessionNumber}/${invoiceNumber}.pdf`;
+      const fileExists = await fsExists(pdfPath, { baseDir: BaseDirectory.AppData });
+      if (fileExists) await remove(pdfPath, { baseDir: BaseDirectory.AppData });
+    } catch { /* non-fatal */ }
+
+    return true;
+  }
+
   async openCashDrawer(printerName: string): Promise<void> {
     try {
       await invoke("open_cash_drawer", { printerName });
@@ -358,10 +429,13 @@ class SaleService {
     allAdditions: PosAddition[],
     allSauces: PosSauce[],
     openFile = true,
+    overrides?: { attendedBy?: string; collectedBy?: string; clientName?: string | null },
   ): Promise<void> {
     const session = this.session();
     const { tenantId, user } = session;
-    const userName = user.display_name || user.username;
+    const userName = overrides?.attendedBy ?? (user.display_name || user.username);
+    const collectedBy = overrides?.collectedBy ?? userName;
+    const clientName = overrides?.clientName ?? null;
 
     // Fetch tenant slug for QR
     const tenant = await tenantRepository.get(tenantId).catch(() => null);
@@ -439,8 +513,9 @@ class SaleService {
       leftText(`Factura #: ${result.invoiceNumber}`);
       leftText(`Fecha:     ${dateStr}`);
       leftText(`Atendido:  ${userName}`);
-      leftText(`Cobrado:   ${userName}`);
+      leftText(`Cobrado:   ${collectedBy}`);
       leftText(`Caja #${sessionNumber}`);
+      if (clientName) leftText(`Cliente:   ${clientName}`);
       divider();
 
       // --- Bloque 3: Items (agrupados) ---
@@ -543,7 +618,6 @@ class SaleService {
           const QR_SIZE = 60;
           doc.addImage(dataUrl, "PNG", (PT_WIDTH - QR_SIZE) / 2, y, QR_SIZE, QR_SIZE);
           y += QR_SIZE + 3;
-          centerText("Ver factura digital", 7);
         } catch { /* QR opcional, no bloquea */ }
       }
 
@@ -572,6 +646,13 @@ class SaleService {
     }
   }
 
+  normalizeWhatsAppPhone(phone: string): string | null {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length < 7) return null;
+    if (digits.length === 10 && digits.startsWith("3")) return `57${digits}`;
+    return digits;
+  }
+
   buildWhatsAppUrl(
     phone: string,
     businessName: string,
@@ -579,17 +660,14 @@ class SaleService {
     req: SaleRequest,
     allAdditions: PosAddition[],
     allSauces: PosSauce[],
+    clientName?: string | null,
   ): string {
-    const normalizePhone = (p: string) => {
-      const digits = p.replace(/\D/g, "");
-      return digits.length === 10 && digits.startsWith("3") ? `57${digits}` : digits;
-    };
+    const normalized = this.normalizeWhatsAppPhone(phone) ?? phone.replace(/\D/g, "");
 
-    const lines: string[] = [
-      `*${businessName}*`,
-      req.delivery ? "*Pedido Domicilio*" : "*Pedido*",
-      `Factura #${invoiceNumber}`,
-    ];
+    const lines: string[] = [`*${businessName}*`];
+    if (req.delivery) lines.push("*Pedido Domicilio*");
+    lines.push(`Factura #${invoiceNumber}`);
+    if (clientName) lines.push(`Cliente: ${clientName}`);
 
     for (const item of req.items) {
       const itemTotal = item.price * item.quantity;
@@ -600,11 +678,11 @@ class SaleService {
         const addition = allAdditions.find((a) => a.id === addId);
         if (!addition) continue;
         const addTotal = addition.price * qty;
-        lines.push(`   + ${qty}x ${addition.name}${addTotal > 0 ? `  +${money(addTotal)}` : ""}`);
+        lines.push(`   + ${qty > 1 ? `${qty}x ` : ""}${addition.name}${addTotal > 0 ? `  +${money(addTotal)}` : ""}`);
       }
       if (item.sauces.length > 0) {
         const names = item.sauces.map((id) => allSauces.find((s) => s.id === id)?.name ?? "").filter(Boolean);
-        lines.push(`   Salsas: ${names.join(", ")}`);
+        if (names.length) lines.push(`   Salsas: ${names.join(", ")}`);
       }
       if (item.note) lines.push(`   Nota: ${item.note}`);
       for (const child of item.children) {
@@ -614,18 +692,16 @@ class SaleService {
           if (qty <= 0) continue;
           const addition = allAdditions.find((a) => a.id === addId);
           if (!addition) continue;
-          lines.push(`     + ${qty}x ${addition.name}`);
+          lines.push(`     + ${qty > 1 ? `${qty}x ` : ""}${addition.name}${addition.price > 0 ? `  +${money(addition.price * qty)}` : ""}`);
         }
         if (child.sauces.length > 0) {
           const names = child.sauces.map((id) => allSauces.find((s) => s.id === id)?.name ?? "").filter(Boolean);
-          lines.push(`     Salsas: ${names.join(", ")}`);
+          if (names.length) lines.push(`     Salsas: ${names.join(", ")}`);
         }
       }
     }
 
-    if (req.delivery) {
-      lines.push(`Domicilio: ${money(req.delivery.type.price)}`);
-    }
+    if (req.delivery && req.delivery.type.price > 0) lines.push(`Domicilio: ${money(req.delivery.type.price)}`);
     lines.push(`*TOTAL: ${money(req.total)}*`);
     lines.push(`Pago: ${payLabel(req.paymentMethod)}`);
     if (req.paymentMethod === "CASH" && req.cashGiven != null) {
@@ -633,11 +709,11 @@ class SaleService {
     }
     if (req.paymentMethod === "SPLIT") {
       lines.push(`  Efectivo: ${money(req.cashAmount ?? 0)} / Tarjeta: ${money(req.cardAmount ?? 0)}`);
+      if (req.cashGiven != null) lines.push(`Recibido: ${money(req.cashGiven)} / Cambio: ${money(req.changeGiven ?? 0)}`);
     }
     if (req.notes) lines.push(`Notas: ${req.notes}`);
 
-    const text = encodeURIComponent(lines.join("\n"));
-    return `https://wa.me/${normalizePhone(phone)}?text=${text}`;
+    return `https://wa.me/${normalized}?text=${encodeURIComponent(lines.join("\n"))}`;
   }
 }
 
@@ -673,7 +749,6 @@ async function qrToDataUrl(text: string, size: number): Promise<string> {
         },
       } as Parameters<typeof QRCodeCanvas>[0]),
     );
-    // Fallback timeout
     setTimeout(() => {
       try {
         const canvas = container.querySelector("canvas");

@@ -136,7 +136,7 @@ export async function ensureSuperAdmin(tenantId: string) {
   if (!user || user.role !== "SUPERADMIN") {
     user = {
       id: crypto.randomUUID(), tenant_id: tenantId, username: SUPERADMIN_USERNAME,
-      password_hash: await hash(SUPERADMIN_PASSWORD, 12), display_name: "Soporte MadPost", role: "SUPERADMIN", active: 1,
+      password_hash: await hash(SUPERADMIN_PASSWORD, 12), display_name: "Juan Pablo Madrigal Castañeda", role: "SUPERADMIN", active: 1,
     };
     await userRepository.insert(user);
   }

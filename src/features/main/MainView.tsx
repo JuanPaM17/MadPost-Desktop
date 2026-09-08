@@ -1,7 +1,7 @@
 import { Badge, Box, Button, Flex, Heading, Separator, Stack, Text } from "@chakra-ui/react";
 import { Tip } from "../../components/ui/Tip";
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, Boxes, CircleHelp, Code2, Download, History, LayoutDashboard, LogOut, Package, PanelLeftClose, PanelLeftOpen, Settings, ShoppingCart, Table2, UserRound, Users, WalletCards } from "lucide-react";
+import { CircleHelp, Download, LogOut, PanelLeftClose, PanelLeftOpen, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { LocalUser } from "../../core/types";
 import { licenseService } from "../license/LicenseService";
@@ -14,24 +14,24 @@ import { InventoryView } from "../inventory/InventoryView";
 import { ConfigView } from "../config/ConfigView";
 import { UsersView } from "../auth/UsersView";
 import { CashRegisterView } from "../cashregister/CashRegisterView";
+import { HistoryView } from "../history/HistoryView";
 import { PosHeaderBar, PosView } from "../pos/PosView";
+import { TablesHeaderBar, TablesView } from "../tables/TablesView";
 import { HomeView } from "../home/HomeView";
 import { invoke } from "@tauri-apps/api/core";
 import { appConfig } from "../../config/AppConfig";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
+import { MENU_ITEMS } from "./menuConfig";
 
 type MenuItem = { id: string; label: string; icon: LucideIcon };
 
-const operations: MenuItem[] = [
-  { id: "home", label: "Inicio", icon: LayoutDashboard },
-  { id: "pos", label: "Punto de Venta", icon: ShoppingCart }, { id: "tables", label: "Mesas", icon: Table2 },
-  { id: "cash", label: "Caja", icon: WalletCards }, { id: "history", label: "Historial", icon: History },
-];
-const catalog: MenuItem[] = [{ id: "products", label: "Productos", icon: Package }, { id: "inventory", label: "Inventario", icon: Boxes }];
-const administration: MenuItem[] = [{ id: "statistics", label: "Estadisticas", icon: BarChart3 }, { id: "audit", label: "Auditoria", icon: History }, { id: "users", label: "Usuarios", icon: Users }];
+const operations: MenuItem[] = MENU_ITEMS.filter((m) => ["home", "pos", "tables", "cash", "history"].includes(m.id));
+const catalog: MenuItem[] = MENU_ITEMS.filter((m) => ["products", "inventory"].includes(m.id));
+const administration: MenuItem[] = MENU_ITEMS.filter((m) => ["statistics", "audit", "users"].includes(m.id));
 
 export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: LocalUser; tenantName: string; onLogout: () => void; onUserUpdated: (user: LocalUser) => void }) {
   const [activeView, setActiveView] = useState("home");
+  const [historyInvoice, setHistoryInvoice] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const admin = user.role === "ADMIN" || user.role === "SUPERADMIN";
@@ -51,7 +51,7 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
         <Separator borderColor="whiteAlpha.300" my="4" />
         <MenuSection title="CATALOGO" items={catalog} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} />
         {admin ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="ADMINISTRACION" items={administration} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
-        {developer ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="DEVELOPER" items={[{ id: "sql-editor", label: "SQL Editor", icon: Code2 }]} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
+        {developer ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="DEVELOPER" items={MENU_ITEMS.filter((m) => m.id === "sql-editor")} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
         <Separator borderColor="whiteAlpha.300" my="4" />
         <MenuButton item={{ id: "settings", label: "Configuracion", icon: Settings }} active={activeView === "settings"} onClick={() => setActiveView("settings")} collapsed={sidebarCollapsed} />
         <MenuButton item={{ id: "updates", label: "Actualizaciones", icon: Download }} active={activeView === "updates"} onClick={() => setActiveView("updates")} collapsed={sidebarCollapsed} />
@@ -62,7 +62,7 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
         {sidebarCollapsed ? <Tip text="Cerrar Sesion"><Button w="full" justifyContent="center" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} /></Button></Tip> : <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} />Cerrar Sesion</Button>}
       </Box>
     </Flex>
-    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" ? "hidden" : "auto"} p={activeView === "pos" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
+    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} active={activeView === "pos"} /> : activeView === "tables" ? <TablesHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" || activeView === "tables" ? "hidden" : "auto"} p={activeView === "pos" || activeView === "tables" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView active={activeView === "pos"} /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} /> : activeView === "tables" ? <TablesView onNavigate={(view, param) => { setHistoryInvoice(param); setActiveView(view); }} /> : activeView === "history" ? <HistoryView initialInvoice={historyInvoice} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
   </Flex>;
 }
 
@@ -87,4 +87,4 @@ function LicenseBanner({ expiresAt }: { expiresAt: string | null }) {
 }
 
 function roleLabel(role: LocalUser["role"]) { return role === "SUPERADMIN" ? "Super Admin" : role === "ADMIN" ? "Administrador" : "Vendedor"; }
-function allItems(admin: boolean, developer: boolean) { return [{ id: "home", label: "Inicio", icon: LayoutDashboard }, ...operations, ...catalog, ...(admin ? administration : []), ...(developer ? [{ id: "sql-editor", label: "SQL Editor", icon: Code2 }] : []), { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }]; }
+function allItems(admin: boolean, developer: boolean) { return [...operations, ...catalog, ...(admin ? administration : []), ...(developer ? MENU_ITEMS.filter((m) => m.id === "sql-editor") : []), { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }]; }
