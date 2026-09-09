@@ -1,6 +1,6 @@
 import { Badge, Box, Button, Flex, Heading, Input, Separator, Spinner, Stack, Text } from "@chakra-ui/react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, LayoutGrid, LayoutTemplate, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
 import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, type CatalogConfirmResult } from "../pos/ProductCatalog";
 import { posService, type PosAddition, type PosSauce } from "../pos/PosService";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,7 +36,7 @@ export function TablesHeaderBar({ userName }: { userName: string }) {
 }
 
 type TableStatus = "free" | "occupied" | "sent" | "overdue";
-type ContextMenu = { x: number; y: number; table: RestaurantTable };
+type ContextMenu = { x: number; y: number; openUp: boolean; table: RestaurantTable };
 type NameModal = { mode: "create" | "edit" | "clone"; table: RestaurantTable | null; name: string };
 type ConfirmModal = { title: string; message: string; onConfirm: () => void };
 type TableCanvasInfo = { clientNames: string[]; total: number };
@@ -151,6 +151,9 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   const session = sessionContext.current();
   const tenantId = session?.tenantId ?? "";
   const isAdmin = session?.user.role === "ADMIN" || session?.user.role === "SUPERADMIN";
+
+  const [viewMode, setViewMode] = useState<"free" | "grid">(() => (localStorage.getItem("tables-view-mode") as "free" | "grid") ?? "free");
+  const [gridSize, setGridSize] = useState<number>(() => Math.min(220, Math.max(100, Number(localStorage.getItem("tables-grid-size") ?? 140))));
 
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [floors, setFloors] = useState<number[]>([1]);
@@ -300,7 +303,9 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
     event.preventDefault();
     event.stopPropagation();
     setSelected(table.id);
-    setContextMenu({ x: event.clientX, y: event.clientY, table });
+    const menuHeight = editMode ? 130 : 90;
+    const openUp = event.clientY + menuHeight > window.innerHeight;
+    setContextMenu({ x: event.clientX, y: event.clientY, openUp, table });
   }
 
   function suggestCloneName(original: string): string {
@@ -441,6 +446,24 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
     });
   }
 
+  const GRID_MIN = 100;
+  const GRID_MAX = 220;
+  const GRID_STEP = 20;
+
+  function changeViewMode(mode: "free" | "grid") {
+    setViewMode(mode);
+    localStorage.setItem("tables-view-mode", mode);
+    if (mode === "grid") { setEditMode(false); setSelected(null); setContextMenu(null); }
+  }
+
+  function changeGridSize(delta: number) {
+    setGridSize((prev) => {
+      const next = Math.min(GRID_MAX, Math.max(GRID_MIN, prev + delta));
+      localStorage.setItem("tables-grid-size", String(next));
+      return next;
+    });
+  }
+
   const selectedTable = selected ? tables.find((t) => t.id === selected) : null;
 
   return (
@@ -470,7 +493,34 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
 
         <Box flex="1" />
 
-        {isAdmin && (
+        {/* Grid size controls — solo en modo cuadricula */}
+        {viewMode === "grid" && (
+          <Flex align="center" gap="1" borderWidth="1px" borderColor="gray.200" borderRadius="md" px="1" py="0.5">
+            <Tip text="Reducir tamano de cuadros">
+              <Button size="xs" variant="ghost" disabled={gridSize <= GRID_MIN} onClick={() => changeGridSize(-GRID_STEP)}><Minus size={13} /></Button>
+            </Tip>
+            <Text fontSize="xs" color="gray.500" minW="36px" textAlign="center">{gridSize}px</Text>
+            <Tip text="Aumentar tamano de cuadros">
+              <Button size="xs" variant="ghost" disabled={gridSize >= GRID_MAX} onClick={() => changeGridSize(GRID_STEP)}><Plus size={13} /></Button>
+            </Tip>
+          </Flex>
+        )}
+
+        {/* Toggle de vista */}
+        <Flex borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden">
+          <Tip text="Vista libre">
+            <Button size="sm" variant="ghost" borderRadius="0" bg={viewMode === "free" ? "gray.100" : undefined} onClick={() => changeViewMode("free")}>
+              <LayoutTemplate size={15} />
+            </Button>
+          </Tip>
+          <Tip text="Vista cuadricula">
+            <Button size="sm" variant="ghost" borderRadius="0" bg={viewMode === "grid" ? "gray.100" : undefined} onClick={() => changeViewMode("grid")}>
+              <LayoutGrid size={15} />
+            </Button>
+          </Tip>
+        </Flex>
+
+        {isAdmin && viewMode === "free" && (
           <Button size="sm" variant={editMode ? "solid" : "outline"} colorPalette={editMode ? "purple" : "gray"}
             onClick={() => { setEditMode((v) => !v); setSelected(null); setContextMenu(null); setPanelTable(null); }}>
             <Pencil size={14} />{editMode ? "Salir de edicion" : "Editar Negocio"}
@@ -478,8 +528,64 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
         )}
       </Flex>
 
+      {/* Grid view */}
+      {viewMode === "grid" && (
+        <Box flex="1" overflow="auto" bg="gray.100" p="5">
+          {tables.filter((t) => t.type === "TABLE").length === 0 ? (
+            <Flex h="full" align="center" justify="center">
+              <Text color="gray.400" fontSize="lg">No hay mesas en este piso.</Text>
+            </Flex>
+          ) : (
+            <Box display="grid" gridTemplateColumns={`repeat(auto-fill, ${gridSize}px)`} gap="3" justifyContent="start">
+              {tables.filter((t) => t.type === "TABLE").sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" })).map((table) => {
+                const tableStatus = getTableStatus(openOrders.get(table.id));
+                const info = canvasInfo.get(table.id);
+                const order = openOrders.get(table.id);
+                const isSelected = selected === table.id;
+                return (
+                  <Box
+                    key={table.id}
+                    w={`${gridSize}px`}
+                    h={`${gridSize}px`}
+                    bg={STATUS_COLORS[tableStatus]}
+                    borderRadius="10px"
+                    border={isSelected ? "3px solid #7c3aed" : "2px solid rgba(0,0,0,0.15)"}
+                    cursor="pointer"
+                    display="flex"
+                    flexDirection="column"
+                    alignItems="center"
+                    justifyContent="center"
+                    px="2"
+                    gap="1"
+                    userSelect="none"
+                    _hover={{ filter: "brightness(0.95)" }}
+                    onClick={() => { setSelected(table.id); setPanelTable(table); }}
+                    onContextMenu={(e) => handleTableContextMenu(e, table)}
+                  >
+                    <Text fontSize="sm" fontWeight="bold" color="gray.800" textAlign="center" lineHeight="1.2" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" maxW="90%">
+                      {table.name}
+                    </Text>
+                    {tableStatus !== "free" && info && (
+                      <>
+                        {info.clientNames.slice(0, 2).map((n, i) => (
+                          <Text key={i} fontSize="xs" color="gray.700" textAlign="center" lineHeight="1.2" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" maxW="90%">{n}</Text>
+                        ))}
+                        {info.clientNames.length > 2 && <Text fontSize="xs" color="gray.600">+{info.clientNames.length - 2} mas</Text>}
+                        {order && <Text fontSize="xs" color="gray.700" lineHeight="1.2">{elapsedLabel(order.opened_at)}</Text>}
+                        <Text fontSize="sm" fontWeight="bold" color="gray.900">{fmtMoney(info.total)}</Text>
+                      </>
+                    )}
+                    {tableStatus === "free" && <Text fontSize="xs" color="gray.600">Libre</Text>}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+        </Box>
+      )}
+
       {/* Canvas area */}
-      <Box
+      {viewMode === "free" && <Box
         flex="1"
         overflow="auto"
         bg="gray.100"
@@ -557,7 +663,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
             </Text>
           </Flex>
         )}
-      </Box>
+      </Box>}
 
       {/* Table detail panel */}
       {panelTable && !editMode && (
@@ -587,7 +693,8 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           id="table-context-menu"
           position="fixed"
           left={`${contextMenu.x}px`}
-          top={`${contextMenu.y}px`}
+          top={contextMenu.openUp ? undefined : `${contextMenu.y}px`}
+          bottom={contextMenu.openUp ? `${window.innerHeight - contextMenu.y}px` : undefined}
           zIndex="popover"
           bg="white"
           borderWidth="1px"
@@ -628,7 +735,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
                 onKeyDown={(e) => { if (e.key === "Enter") void saveNameModal(); }}
               />
             </FieldBox>
-            {nameModal.mode === "create" && (
+            {nameModal.mode === "create" && viewMode === "free" && (
               <Text fontSize="xs" color="gray.500">
                 Arrastra la mesa en el editor para moverla. Usa las esquinas para cambiar el tamaño.
               </Text>
@@ -1238,10 +1345,12 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               </Tip>
             ) : (
               <Button size="sm" colorPalette="green" flex="1" onClick={() => {
-                // Atajo: un solo producto raiz en toda la mesa → cobrar directo
-                if (rootItems.length === 1) { setCheckout("todo"); return; }
-                // Resto: modal de seleccion
-                setCheckout("selector");
+                // Releer items frescos de SQLite antes de abrir checkout para capturar
+                // notas y cambios recientes que aún no se reflejaron en el estado en memoria.
+                void reload().then(() => {
+                  if (rootItems.length === 1) { setCheckout("todo"); return; }
+                  setCheckout("selector");
+                });
               }}>Cobrar</Button>
             )}
             <Box position="relative" ref={moreRef}>
@@ -2620,14 +2729,9 @@ function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderIte
     onItemsChange?.();
   }
 
-  const saveNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function scheduleNotesave(val: string) {
-    if (saveNoteTimerRef.current) clearTimeout(saveNoteTimerRef.current);
-    saveNoteTimerRef.current = setTimeout(() => {
-      const trimmed = val.trim() || null;
-      void Promise.all(group.map((gi) => tableOrderService.updateItemNotes(gi.id, trimmed)));
-    }, 600);
+  function saveNote(val: string) {
+    const trimmed = val.trim() || null;
+    void Promise.all(group.map((gi) => tableOrderService.updateItemNotes(gi.id, trimmed)));
   }
 
   return (
@@ -2673,7 +2777,7 @@ function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderIte
       {/* Nota */}
       {noteOpen && (
         <Input size="xs" mt="1" placeholder="Nota del producto" value={noteVal}
-          onChange={(e) => { setNoteVal(e.target.value); scheduleNotesave(e.target.value); }} />
+          onChange={(e) => { setNoteVal(e.target.value); saveNote(e.target.value); }} />
       )}
 
       {/* Detalles */}

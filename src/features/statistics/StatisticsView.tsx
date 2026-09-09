@@ -195,6 +195,8 @@ async function loadProducts(filters: Filters): Promise<ProductRow[]> {
 }
 
 type AdditionRow = { name: string; qty: number; subtotal: number };
+type CategoryRow = { name: string; qty: number; subtotal: number };
+type SellerRow = { name: string; count: number; total: number };
 
 async function loadAdditions(filters: Filters): Promise<AdditionRow[]> {
   const db = await databaseManager.database();
@@ -229,6 +231,76 @@ async function loadAdditions(filters: Filters): Promise<AdditionRow[]> {
   );
 
   return rows.map((r) => ({ name: r.name, qty: Number(r.qty), subtotal: Number(r.subtotal) }));
+}
+
+async function loadCategories(filters: Filters): Promise<CategoryRow[]> {
+  const db = await databaseManager.database();
+  const session = sessionContext.current();
+  if (!session) return [];
+
+  const conditions: string[] = ["si.combo_sale_item_id IS NULL"];
+  const params: unknown[] = [];
+
+  if (filters.sessionId) {
+    conditions.push("s.cash_session_id=$" + params.push(filters.sessionId));
+  } else {
+    conditions.push("s.tenant_id=$" + params.push(session.tenantId));
+    if (filters.dateFrom) conditions.push("s.created_at >= $" + params.push(filters.dateFrom + "T00:00:00.000Z"));
+    const to = filters.dateTo || todayIso();
+    conditions.push("s.created_at <= $" + params.push(to + "T23:59:59.999Z"));
+  }
+
+  const where = "WHERE " + conditions.join(" AND ");
+
+  const rows = await db.select<{ name: string; qty: number; subtotal: number }[]>(
+    `SELECT COALESCE(si.category_name, cat.name, 'Sin categoria') AS name,
+            SUM(si.quantity) AS qty,
+            COALESCE(SUM(si.subtotal), 0) AS subtotal
+     FROM sale_items si
+     JOIN sales s ON si.sale_id = s.id
+     LEFT JOIN products p ON si.product_id = p.id
+     LEFT JOIN categories cat ON p.category_id = cat.id
+     ${where}
+     GROUP BY COALESCE(si.category_name, cat.name, 'Sin categoria')
+     ORDER BY SUM(si.subtotal) DESC`,
+    params,
+  );
+
+  return rows.map((r) => ({ name: r.name, qty: Number(r.qty), subtotal: Number(r.subtotal) }));
+}
+
+async function loadSellers(filters: Filters): Promise<SellerRow[]> {
+  const db = await databaseManager.database();
+  const session = sessionContext.current();
+  if (!session) return [];
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.sessionId) {
+    conditions.push("s.cash_session_id=$" + params.push(filters.sessionId));
+  } else {
+    conditions.push("s.tenant_id=$" + params.push(session.tenantId));
+    if (filters.dateFrom) conditions.push("s.created_at >= $" + params.push(filters.dateFrom + "T00:00:00.000Z"));
+    const to = filters.dateTo || todayIso();
+    conditions.push("s.created_at <= $" + params.push(to + "T23:59:59.999Z"));
+  }
+
+  const where = "WHERE " + conditions.join(" AND ");
+
+  const rows = await db.select<{ name: string; count: number; total: number }[]>(
+    `SELECT COALESCE(u.display_name, u.username, 'Desconocido') AS name,
+            COUNT(*) AS count,
+            COALESCE(SUM(s.total), 0) AS total
+     FROM sales s
+     LEFT JOIN users u ON s.user_id = u.id
+     ${where}
+     GROUP BY s.user_id
+     ORDER BY SUM(s.total) DESC`,
+    params,
+  );
+
+  return rows.map((r) => ({ name: r.name, count: Number(r.count), total: Number(r.total) }));
 }
 
 async function loadStats(filters: Filters): Promise<Stats> {
@@ -311,6 +383,8 @@ export function StatisticsView() {
   const [hourData, setHourData] = useState<HourPoint[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [additions, setAdditions] = useState<AdditionRow[]>([]);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [sellers, setSellers] = useState<SellerRow[]>([]);
   const initRef = useRef(false);
 
   useEffect(() => {
@@ -326,8 +400,8 @@ export function StatisticsView() {
         ? { sessionId: list[0].id, dateFrom: "", dateTo: "" }
         : { sessionId: null, dateFrom: "", dateTo: "" };
       setFilters(initial);
-      return Promise.all([loadStats(initial), loadByHour(initial), loadProducts(initial), loadAdditions(initial)]);
-    }).then(([s, h, p, a]) => { if (s) setStats(s); setHourData(h); setProducts(p); setAdditions(a); }).finally(() => setLoading(false));
+      return Promise.all([loadStats(initial), loadByHour(initial), loadProducts(initial), loadAdditions(initial), loadCategories(initial), loadSellers(initial)]);
+    }).then(([s, h, p, a, c, sl]) => { if (s) setStats(s); setHourData(h); setProducts(p); setAdditions(a); setCategories(c); setSellers(sl); }).finally(() => setLoading(false));
   }, []);
 
   async function applyFilters(f: Filters) {
@@ -335,8 +409,8 @@ export function StatisticsView() {
     setFiltersOpen(false);
     setLoading(true);
     try {
-      const [s, h, p, a] = await Promise.all([loadStats(f), loadByHour(f), loadProducts(f), loadAdditions(f)]);
-      setStats(s); setHourData(h); setProducts(p); setAdditions(a);
+      const [s, h, p, a, c, sl] = await Promise.all([loadStats(f), loadByHour(f), loadProducts(f), loadAdditions(f), loadCategories(f), loadSellers(f)]);
+      setStats(s); setHourData(h); setProducts(p); setAdditions(a); setCategories(c); setSellers(sl);
     } finally { setLoading(false); }
   }
 
@@ -345,8 +419,8 @@ export function StatisticsView() {
     setFilters(f);
     setLoading(true);
     try {
-      const [s, h, p, a] = await Promise.all([loadStats(f), loadByHour(f), loadProducts(f), loadAdditions(f)]);
-      setStats(s); setHourData(h); setProducts(p); setAdditions(a);
+      const [s, h, p, a, c, sl] = await Promise.all([loadStats(f), loadByHour(f), loadProducts(f), loadAdditions(f), loadCategories(f), loadSellers(f)]);
+      setStats(s); setHourData(h); setProducts(p); setAdditions(a); setCategories(c); setSellers(sl);
     } finally { setLoading(false); }
   }
 
@@ -392,8 +466,8 @@ export function StatisticsView() {
       {/* Cards col-4 */}
       <Grid templateColumns="repeat(3, 1fr)" gap="4" mb="4">
         <StatCard title="Ventas Totales" value={String(stats.totalCount)} sub="ventas" />
-        <StatCard title="Ingreso Total" value={fmtMoney(stats.totalRevenue)} />
         <StatCard title="Venta Promedio" value={fmtMoney(stats.avgSale)} />
+        <StatCard title="Ingreso Total" value={fmtMoney(stats.totalRevenue)} />
         <StatCard title="Efectivo" value={fmtMoney(stats.cashTotal)} sub={`${stats.cashCount} ${stats.cashCount === 1 ? "venta" : "ventas"}`} />
         <StatCard title="Tarjeta" value={fmtMoney(stats.cardTotal)} sub={`${stats.cardCount} ${stats.cardCount === 1 ? "venta" : "ventas"}`} />
         <StatCard
@@ -469,6 +543,12 @@ export function StatisticsView() {
             </Table.Row>
           ))}
         </SoldTable>
+      </Grid>
+
+      {/* Ventas por categoria y por vendedor - col 6 cada uno */}
+      <Grid templateColumns="repeat(2, 1fr)" gap="4" mt="4">
+        <CategoryTable rows={categories} />
+        <SellerTable rows={sellers} />
       </Grid>
 
       {filtersOpen && (
@@ -634,6 +714,84 @@ function ProductTableRow({ row }: { row: ProductRow }) {
         </Table.Row>
       ))}
     </>
+  );
+}
+
+function CategoryTable({ rows }: { rows: CategoryRow[] }) {
+  const totalRevenue = rows.reduce((acc, r) => acc + r.subtotal, 0);
+  return (
+    <Box bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden">
+      <Box px="5" py="4" borderBottomWidth="1px" borderColor="gray.100">
+        <Text fontWeight="bold" fontSize="sm" color="gray.500" textTransform="uppercase" letterSpacing="wide">Ventas por categoria</Text>
+      </Box>
+      {rows.length === 0 ? (
+        <Flex h="100px" align="center" justify="center">
+          <Text color="gray.400" fontSize="sm">Sin datos en el periodo seleccionado.</Text>
+        </Flex>
+      ) : (
+        <Box overflowX="auto" maxH="420px" overflowY="auto">
+          <Table.Root size="sm">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeader>Categoria</Table.ColumnHeader>
+                <Table.ColumnHeader w="90px" textAlign="right">Cantidad</Table.ColumnHeader>
+                <Table.ColumnHeader w="130px" textAlign="right">Ingreso</Table.ColumnHeader>
+                <Table.ColumnHeader w="80px" textAlign="right">%</Table.ColumnHeader>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {rows.map((r) => {
+                const pct = totalRevenue > 0 ? (r.subtotal / totalRevenue) * 100 : 0;
+                return (
+                  <Table.Row key={r.name}>
+                    <Table.Cell><Text fontWeight="medium">{r.name}</Text></Table.Cell>
+                    <Table.Cell textAlign="right">{r.qty}</Table.Cell>
+                    <Table.Cell textAlign="right">{fmtMoney(r.subtotal)}</Table.Cell>
+                    <Table.Cell textAlign="right" color="gray.500">{pct.toFixed(1)}%</Table.Cell>
+                  </Table.Row>
+                );
+              })}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function SellerTable({ rows }: { rows: SellerRow[] }) {
+  return (
+    <Box bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden">
+      <Box px="5" py="4" borderBottomWidth="1px" borderColor="gray.100">
+        <Text fontWeight="bold" fontSize="sm" color="gray.500" textTransform="uppercase" letterSpacing="wide">Ventas por vendedor</Text>
+      </Box>
+      {rows.length === 0 ? (
+        <Flex h="100px" align="center" justify="center">
+          <Text color="gray.400" fontSize="sm">Sin datos en el periodo seleccionado.</Text>
+        </Flex>
+      ) : (
+        <Box overflowX="auto" maxH="420px" overflowY="auto">
+          <Table.Root size="sm">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeader>Vendedor</Table.ColumnHeader>
+                <Table.ColumnHeader w="90px" textAlign="right">Ventas</Table.ColumnHeader>
+                <Table.ColumnHeader w="130px" textAlign="right">Total</Table.ColumnHeader>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {rows.map((r) => (
+                <Table.Row key={r.name}>
+                  <Table.Cell><Text fontWeight="medium">{r.name}</Text></Table.Cell>
+                  <Table.Cell textAlign="right">{r.count}</Table.Cell>
+                  <Table.Cell textAlign="right">{fmtMoney(r.total)}</Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      )}
+    </Box>
   );
 }
 

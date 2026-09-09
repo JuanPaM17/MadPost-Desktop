@@ -2,7 +2,7 @@ import { sessionContext } from "../../core/session/SessionContext";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 
 export type PosCategory = { id: string; name: string };
-export type PosProduct = { id: string; name: string; description: string | null; price: number; originalPrice: number; categoryId: string | null; showAdditions: boolean; showSauces: boolean; stock: number | null; options: string[] };
+export type PosProduct = { id: string; name: string; description: string | null; price: number; originalPrice: number; categoryId: string | null; categoryName: string | null; showAdditions: boolean; showSauces: boolean; stock: number | null; options: string[] };
 export type PosAddition = { id: string; name: string; price: number; stock: number | null };
 export type PosSauce = { id: string; name: string };
 export type PosComboItem = { productId: string; name: string; quantity: number; showAdditions: boolean; showSauces: boolean; options: string[] };
@@ -25,8 +25,8 @@ class PosService {
 
   async products(categoryId: string | null): Promise<PosProduct[]> {
     const database = await databaseManager.database();
-    const rows = await database.select<{ id: string; name: string; description: string | null; price: number; category_id: string | null; show_additions: number | null; show_sauces: number | null; stock: number | null; discount_type: "PERCENT" | "FIXED_PRICE" | null; discount_value: number | null }[]>(
-      `SELECT p.id, p.name, p.description, p.price, p.category_id, c.show_additions, c.show_sauces, p.stock, d.discount_type, d.discount_value FROM products p
+    const rows = await database.select<{ id: string; name: string; description: string | null; price: number; category_id: string | null; category_name: string | null; show_additions: number | null; show_sauces: number | null; stock: number | null; discount_type: "PERCENT" | "FIXED_PRICE" | null; discount_value: number | null }[]>(
+      `SELECT p.id, p.name, p.description, p.price, p.category_id, c.name AS category_name, c.show_additions, c.show_sauces, p.stock, d.discount_type, d.discount_value FROM products p
        LEFT JOIN categories c ON c.id=p.category_id
        LEFT JOIN discounts d ON d.product_id=p.id AND d.tenant_id=p.tenant_id AND d.active=1 AND (d.start_date IS NULL OR d.start_date <= $3) AND (d.end_date IS NULL OR d.end_date >= $3)
        WHERE p.tenant_id=$1 AND p.active=1 AND ($2 IS NULL OR p.category_id=$2)
@@ -36,7 +36,7 @@ class PosService {
     const optionRows = await database.select<{ product_id: string; name: string }[]>("SELECT po.product_id, po.name FROM product_options po JOIN products p ON p.id=po.product_id WHERE p.tenant_id=$1 AND po.active=1 ORDER BY po.sort_order", [this.tenantId()]);
     const options = new Map<string, string[]>();
     for (const row of optionRows) options.set(row.product_id, [...(options.get(row.product_id) ?? []), row.name]);
-    return rows.map((row) => { const originalPrice = Number(row.price ?? 0); const price = row.discount_type === "FIXED_PRICE" ? Number(row.discount_value) : row.discount_type === "PERCENT" ? originalPrice * (1 - Number(row.discount_value ?? 0) / 100) : originalPrice; return { id: row.id, name: row.name, description: row.description, price, originalPrice, categoryId: row.category_id, showAdditions: row.show_additions === 1, showSauces: row.show_sauces === 1, stock: row.stock === null ? null : Number(row.stock), options: options.get(row.id) ?? [] }; });
+    return rows.map((row) => { const originalPrice = Number(row.price ?? 0); const price = row.discount_type === "FIXED_PRICE" ? Number(row.discount_value) : row.discount_type === "PERCENT" ? originalPrice * (1 - Number(row.discount_value ?? 0) / 100) : originalPrice; return { id: row.id, name: row.name, description: row.description, price, originalPrice, categoryId: row.category_id, categoryName: row.category_name ?? null, showAdditions: row.show_additions === 1, showSauces: row.show_sauces === 1, stock: row.stock === null ? null : Number(row.stock), options: options.get(row.id) ?? [] }; });
   }
 
   async additions(): Promise<PosAddition[]> {

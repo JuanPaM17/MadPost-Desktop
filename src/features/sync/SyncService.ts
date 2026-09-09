@@ -80,8 +80,26 @@ class SyncService {
     try { payload = JSON.parse(entry.payload_json) as Record<string, unknown>; }
     catch { throw new Error("payload_json invalido"); }
     if (!payload || Array.isArray(payload)) throw new Error("payload_json debe ser un objeto JSON");
+
+    // Validate that the id field in the payload is a valid UUID. If not, discard the entry
+    // to prevent it from permanently blocking the queue with invalid data.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (typeof payload.id === "string" && !UUID_RE.test(payload.id)) {
+      const database = await databaseManager.database();
+      await database.execute("UPDATE sync_queue SET retry_count = 99 WHERE id = $1", [entry.id]);
+      runtimeLogger.error("SyncService", `Entrada descartada por id invalido en payload. id=${entry.id} tabla=${entry.table_name} payloadId=${payload.id as string}`);
+      return;
+    }
+
     const client = supabaseConnection.getClient();
+    // product_supplies usa PK compuesta (product_id, supply_id) — sin columna id
+    const noIdTable = entry.table_name === "product_supplies";
     const upsert = entry.action === "INSERT" || entry.table_name === "cash_sessions" || entry.table_name === "users";
+    if (noIdTable) {
+      const { error } = await client.from(entry.table_name).upsert(payload);
+      if (error) throw new Error(error.message);
+      return;
+    }
     const { data, error } = upsert
       ? await client.from(entry.table_name).upsert(payload).select("id")
       : await client.from(entry.table_name).update(payload).eq("id", entry.record_id).select("id");

@@ -48,11 +48,17 @@ export const tenantRepository = {
     const database = await databaseManager.database();
     const timestamp = instantNow();
     await database.execute(
-      `INSERT INTO tenants(id, name, slug, address, phone, tax_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, slug = excluded.slug,
-       address = excluded.address, phone = excluded.phone, tax_id = excluded.tax_id, updated_at = excluded.updated_at`,
-      [tenant.id, tenant.name, tenant.slug, tenant.address, tenant.phone, tenant.tax_id, timestamp],
+      `INSERT INTO tenants(id, name, slug, address, phone, tax_id, invoice_footer, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+       ON CONFLICT(id) DO UPDATE SET
+       name = CASE WHEN tenants.name IS NULL OR tenants.name = '' THEN excluded.name ELSE tenants.name END,
+       slug = excluded.slug,
+       address = COALESCE(excluded.address, tenants.address),
+       phone = COALESCE(excluded.phone, tenants.phone),
+       tax_id = COALESCE(excluded.tax_id, tenants.tax_id),
+       invoice_footer = COALESCE(excluded.invoice_footer, tenants.invoice_footer),
+       updated_at = excluded.updated_at`,
+      [tenant.id, tenant.name, tenant.slug, tenant.address, tenant.phone, tenant.tax_id, null, timestamp],
     );
   },
   async get(id: string): Promise<Tenant | null> {

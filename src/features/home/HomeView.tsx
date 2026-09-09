@@ -154,17 +154,15 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               action="Ver Mesas"
               onAction={() => onNavigate("tables")}
             />
-            {isAdmin ? (
-              <StatCard
-                icon={<AlertTriangle size={16} />}
-                color={data?.lowStockCount ? "red" : "green"}
-                title="Stock bajo"
-                value={data?.lowStockCount ? `${data.lowStockCount} insumos` : "Todo en orden"}
-                subtitle={data?.lowStockCount ? "Requieren reabastecimiento" : "Sin alertas de inventario"}
-                action="Ver Inventario"
-                onAction={() => onNavigate("inventory")}
-              />
-            ) : null}
+            <StatCard
+              icon={<AlertTriangle size={16} />}
+              color={data?.lowStockCount ? "red" : "green"}
+              title="Stock bajo"
+              value={data?.lowStockCount ? `${data.lowStockCount} insumos` : "Todo en orden"}
+              subtitle={data?.lowStockCount ? "Requieren reabastecimiento" : "Sin alertas de inventario"}
+              action="Ver Inventario"
+              onAction={() => onNavigate("inventory")}
+            />
           </Grid>
 
           {/* Accesos rapidos */}
@@ -180,7 +178,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
             <QuickButton icon={<WalletCards size={16} />} label="Caja" onClick={() => onNavigate("cash")} colorPalette="green" />
             <QuickButton icon={<Package size={16} />} label="Productos" onClick={() => onNavigate("products")} colorPalette="blue" />
             <QuickButton icon={<Table2 size={16} />} label="Mesas" onClick={() => onNavigate("tables")} colorPalette="teal" />
-            {isAdmin ? <QuickButton icon={<AlertTriangle size={16} />} label="Inventario" onClick={() => onNavigate("inventory")} colorPalette="orange" /> : null}
+            <QuickButton icon={<AlertTriangle size={16} />} label="Inventario" onClick={() => onNavigate("inventory")} colorPalette="orange" />
             {/* Extras configurados por el usuario */}
             {extraLinks.map((id) => {
               const opt = availableOptions.find((o) => o.id === id);

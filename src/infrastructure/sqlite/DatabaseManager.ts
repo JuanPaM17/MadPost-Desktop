@@ -216,6 +216,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "tenants", "printer_kitchen", "TEXT");
     await this.ensureColumn(database, "tenants", "comanda_copies", "INTEGER");
     await this.ensureColumn(database, "tenants", "delivery_whatsapp", "TEXT");
+    await this.ensureColumn(database, "tenants", "mobile_server_enabled", "INTEGER NOT NULL DEFAULT 0");
     await this.ensureColumn(database, "table_order_clients", "notes", "TEXT");
     await this.ensureColumn(database, "table_order_clients", "is_card", "INTEGER");
     await this.ensureColumn(database, "table_orders", "comanda_sent", "INTEGER");

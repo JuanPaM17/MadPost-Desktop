@@ -314,8 +314,8 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
                 note: item.note,
                 additions: item.additions,
                 sauces: item.sauces,
-                productId: item.key.replace(/^product:/, ""),
-                categoryName: null,
+                productId: item.key.split(":")[1] ?? item.key,
+                categoryName: item.categoryName,
                 children: item.children.map((child) => ({
                   productId: child.productId,
                   name: child.name,

@@ -33,6 +33,8 @@ function App() {
     const result = await startApplication(() => { setTenant({ id: "", name: "" }); setOnline(false); setScreen("license"); });
     if (result.screen === "license") { setOnline(result.online); setScreen("license"); return; }
     setTenant({ id: result.tenantId, name: result.tenantName });
+    const update = await updateService.checkForUpdate();
+    if (update) await new Promise<void>((resolve) => { updateDecision.current = resolve; setPendingUpdate(update); });
     setScreen((await authService.hasAdminUser(result.tenantId)) ? "login" : "setup");
   }
 
@@ -57,8 +59,6 @@ function App() {
   }
 
   async function showMain(authenticatedUser: LocalUser) {
-    const update = await updateService.checkForUpdate();
-    if (update) await new Promise<void>((resolve) => { updateDecision.current = resolve; setPendingUpdate(update); });
     sessionContext.login(authenticatedUser, tenant.name);
     const cachedLicense = await licenseService.hasValidCachedLicense();
     await postLoginCoordinator.start({
@@ -79,7 +79,7 @@ function App() {
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
-    {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={() => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={() => updateService.install(pendingUpdate)} /> : null}
+    {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={pendingUpdate.forced ? undefined : () => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={() => updateService.install(pendingUpdate)} /> : null}
   </>;
 }
 

@@ -4,6 +4,7 @@ import { syncService } from "../sync/SyncService";
 import { deleteSyncService } from "../sync/DeleteSyncService";
 import { backupScheduler } from "../backup/BackupScheduler";
 import { syncCommandPoller } from "../sync/SyncCommandPoller";
+import { mobileDevicesService } from "../api/MobileDevicesService";
 
 export type RuntimeContext = {
   tenantId: string;
@@ -61,7 +62,12 @@ class PostLoginCoordinator {
     if (this.activeTenantId) await this.stop();
     this.activeTenantId = context.tenantId;
     runtimeLogger.info("PostLoginCoordinator", "Iniciando servicios posteriores al login.", { tenantId: context.tenantId, syncEnabled: context.syncEnabled });
+    const mobileEnabled = await mobileDevicesService.loadAutoStart().catch(() => false);
     for (const service of this.services) {
+      if (!mobileEnabled && (service instanceof MadPostApiServer || service instanceof MdnsPublisher)) {
+        runtimeLogger.info("PostLoginCoordinator", "Servidor local omitido por configuracion.", {});
+        continue;
+      }
       try { await service.start(context); } catch (error) { runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar un servicio.", error); }
     }
     runtimeLogger.info("PostLoginCoordinator", "Inicializacion posterior al login completada.", { tenantId: context.tenantId });

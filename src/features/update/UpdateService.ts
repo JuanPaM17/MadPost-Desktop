@@ -3,10 +3,11 @@ import { appConfig } from "../../config/AppConfig";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
 
 export const APP_VERSION = __MADPOST_VERSION__;
-export type UpdateInfo = { version: string; releaseUrl: string; downloadUrl: string | null; releaseNotes: string };
+export type UpdateInfo = { version: string; releaseUrl: string; downloadUrl: string | null; releaseNotes: string; forced: boolean };
 export type ReleaseEntry = { version: string; date: string; notes: string };
 export type UpdateCheckResult = { state: "upToDate" | "available" | "unavailable"; message: string; update: UpdateInfo | null };
 type GithubRelease = { tag_name?: string; html_url?: string; body?: string | null; published_at?: string | null; assets?: { id?: number; name?: string }[] };
+type UpdateConfig = { latestVersion: string; minimumVersion: string };
 
 class UpdateService {
   async checkForUpdate(): Promise<UpdateInfo | null> { return (await this.check()).update; }
@@ -15,15 +16,38 @@ class UpdateService {
     if (import.meta.env.DEV) return { state: "upToDate", message: "Estas usando una version de desarrollo.", update: null };
     if (!appConfig.githubRepo()) return { state: "unavailable", message: "Las actualizaciones no estan disponibles en este momento.", update: null };
     try {
-      const response = await fetch(`${releasesApi()}/latest`, { headers: githubHeaders(), signal: AbortSignal.timeout(8_000) });
-      if (response.status === 404) return { state: "unavailable", message: "Aun no hay una actualizacion publicada para tu aplicacion.", update: null };
-      if (!response.ok) return { state: "unavailable", message: "No pudimos consultar actualizaciones ahora. Puedes seguir trabajando con normalidad.", update: null };
-      const release = await response.json() as GithubRelease;
-      const version = normalizeVersion(release.tag_name);
-      if (!version) return { state: "unavailable", message: "Aun no hay una actualizacion publicada para tu aplicacion.", update: null };
-      if (!isNewer(version, APP_VERSION)) return { state: "upToDate", message: "Tienes la version mas reciente instalada.", update: null };
-      const asset = release.assets?.find((entry) => entry.name?.toLowerCase().endsWith(".exe"));
-      return { state: "available", message: "Hay una actualizacion disponible para descargar.", update: { version, releaseUrl: release.html_url ?? "", downloadUrl: asset?.id ? `${releasesApi()}/assets/${asset.id}` : null, releaseNotes: release.body ?? "" } };
+      // 1. Leer update-config.json para determinar forced y si hay update
+      const configResponse = await fetch(
+        `https://raw.githubusercontent.com/${appConfig.githubRepo()}/main/update-config.json`,
+        { signal: AbortSignal.timeout(6_000) },
+      );
+      if (!configResponse.ok) {
+        runtimeLogger.info("UpdateService", "No se pudo leer update-config.json; se continua normalmente.", { status: configResponse.status });
+        return { state: "unavailable", message: "No pudimos consultar actualizaciones ahora. Puedes seguir trabajando con normalidad.", update: null };
+      }
+      const config = await configResponse.json() as UpdateConfig;
+      const forced = isNewer(config.minimumVersion, APP_VERSION);
+      const updateAvailable = isNewer(config.latestVersion, APP_VERSION);
+      if (!forced && !updateAvailable) return { state: "upToDate", message: "Tienes la version mas reciente instalada.", update: null };
+
+      // 2. Obtener release de GitHub para notas y downloadUrl
+      const releaseResponse = await fetch(`${releasesApi()}/latest`, { headers: githubHeaders(), signal: AbortSignal.timeout(8_000) });
+      let releaseNotes = "";
+      let releaseUrl = "";
+      let downloadUrl: string | null = null;
+      if (releaseResponse.ok) {
+        const release = await releaseResponse.json() as GithubRelease;
+        releaseNotes = release.body ?? "";
+        releaseUrl = release.html_url ?? "";
+        const asset = release.assets?.find((entry) => entry.name?.toLowerCase().endsWith(".exe"));
+        downloadUrl = asset?.id ? `${releasesApi()}/assets/${asset.id}` : null;
+      }
+
+      return {
+        state: "available",
+        message: forced ? "Esta version ya no es compatible. Debes actualizar para continuar." : "Hay una actualizacion disponible para descargar.",
+        update: { version: config.latestVersion, releaseUrl, downloadUrl, releaseNotes, forced },
+      };
     } catch (error) {
       runtimeLogger.info("UpdateService", "No se pudo verificar actualizaciones; se continua normalmente.", { reason: errorMessage(error) });
       return { state: "unavailable", message: "No pudimos conectarnos para buscar actualizaciones. Puedes intentarlo de nuevo mas tarde.", update: null };

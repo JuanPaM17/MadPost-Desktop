@@ -35,6 +35,7 @@ export type CartItem = {
   sauces: string[];
   options: string[];
   selectedOption: string | null;
+  categoryName: string | null;
   children: CartChild[];
 };
 
@@ -554,6 +555,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         sauces: [],
         options: item.options,
         selectedOption: item.options.length > 0 ? item.options[0] : null,
+        categoryName: item.categoryName,
         children: [],
       };
       pendingCartItem.current = ci;
@@ -592,6 +594,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         sauces: [],
         options: [],
         selectedOption: null,
+        categoryName: null,
         children,
       };
       pendingCartItem.current = ci;

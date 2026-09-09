@@ -13,7 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -239,3 +239,25 @@ fn ensure_scheduled_tasks_registered() -> TaskRegistrationResult {
 }
 
 fn xml_escape(value: &str) -> String { value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") }
+
+#[tauri::command]
+fn export_db_backup(dest_path: String) -> Result<(), String> {
+    let src = std::path::PathBuf::from(env::var("APPDATA").map_err(|_| "APPDATA no disponible".to_string())?)
+        .join("com.madpost.desktop").join("madpost.db");
+    fs::copy(&src, &dest_path).map_err(|e| format!("No fue posible exportar la base de datos: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_db_backup(src_path: String) -> Result<(), String> {
+    let dest = std::path::PathBuf::from(env::var("APPDATA").map_err(|_| "APPDATA no disponible".to_string())?)
+        .join("com.madpost.desktop").join("madpost.db");
+    fs::copy(&src_path, &dest).map_err(|e| format!("No fue posible restaurar la base de datos: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
