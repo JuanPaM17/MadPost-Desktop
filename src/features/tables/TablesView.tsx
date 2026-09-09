@@ -1,6 +1,6 @@
 import { Badge, Box, Button, Flex, Heading, Input, Separator, Spinner, Stack, Text } from "@chakra-ui/react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
 import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, type CatalogConfirmResult } from "../pos/ProductCatalog";
 import { posService, type PosAddition, type PosSauce } from "../pos/PosService";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,6 +12,7 @@ import { businessConfigService, printerService, type DeliveryType } from "../con
 import { auditService } from "../audit/AuditService";
 import { Tip } from "../../components/ui/Tip";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
+import { comandaService, setDevComandaPreviewCallback } from "./ComandaService";
 
 function formatClock(date: Date): string {
   const day = date.toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -568,6 +569,13 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
             setOpenOrders((prev) => { const next = new Map(prev); next.delete(tableId); return next; });
             setCanvasInfo((prev) => { const next = new Map(prev); next.delete(tableId); return next; });
           }}
+          onComandaSent={(tableId) => {
+            setOpenOrders((prev) => {
+              const order = prev.get(tableId);
+              if (!order) return prev;
+              return new Map(prev).set(tableId, { ...order, comanda_sent: 1 });
+            });
+          }}
           onCanvasInfoChange={(tableId, info) => setCanvasInfo((prev) => new Map(prev).set(tableId, info))}
           onNavigate={onNavigate}
         />
@@ -658,7 +666,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   );
 }
 
-function TablePanel({ table, onClose, onTableOpened, onTableClosed, onCanvasInfoChange, onNavigate }: { table: RestaurantTable; onClose: () => void; onTableOpened: (order: TableOrder) => void; onTableClosed: (tableId: string) => void; onCanvasInfoChange: (tableId: string, info: TableCanvasInfo) => void; onNavigate: (view: string, param?: string) => void }) {
+function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSent, onCanvasInfoChange, onNavigate }: { table: RestaurantTable; onClose: () => void; onTableOpened: (order: TableOrder) => void; onTableClosed: (tableId: string) => void; onComandaSent: (tableId: string) => void; onCanvasInfoChange: (tableId: string, info: TableCanvasInfo) => void; onNavigate: (view: string, param?: string) => void }) {
   const [activeTab, setActiveTab] = useState<"cuenta" | "historial">("cuenta");
   const [cash, setCash] = useState<CashSession | null | "loading">("loading");
   const [order, setOrder] = useState<TableOrder | null | "loading">("loading");
@@ -734,6 +742,7 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onCanvasInfo
             order={order}
             onOrderOpened={(o) => { setOrder(o); onTableOpened(o); }}
             onOrderClosed={() => { setOrder(null); onTableClosed(table.id); }}
+            onComandaSent={() => { setOrder((prev) => prev && prev !== "loading" ? { ...prev, comanda_sent: 1 } : prev); onComandaSent(table.id); }}
             onCanvasInfoChange={(info) => onCanvasInfoChange(table.id, info)}
           />
         ) : (
@@ -744,12 +753,13 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onCanvasInfo
   );
 }
 
-function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onCanvasInfoChange }: {
+function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComandaSent, onCanvasInfoChange }: {
   table: RestaurantTable;
   cash: CashSession | null | "loading";
   order: TableOrder | null | "loading";
   onOrderOpened: (order: TableOrder) => void;
   onOrderClosed: () => void;
+  onComandaSent?: () => void;
   onCanvasInfoChange?: (info: TableCanvasInfo) => void;
 }) {
   const session = sessionContext.current();
@@ -854,6 +864,7 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onCanvasI
       cash={cash}
       openedJustNow={openedJustNow}
       onOrderClosed={onOrderClosed}
+      onComandaSent={onComandaSent}
       onCanvasInfoChange={onCanvasInfoChange}
     />
   );
@@ -862,12 +873,13 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onCanvasI
 type SplitSlot = { id: string; items: TableOrderItem[]; deliveryType: DeliveryType | null };
 
 // Pasa openedJustNow=true solo cuando la orden acaba de crearse desde el botón Abrir Mesa
-function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, onCanvasInfoChange }: {
+function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, onComandaSent, onCanvasInfoChange }: {
   table: RestaurantTable;
   order: TableOrder;
   cash: CashSession;
   openedJustNow: boolean;
   onOrderClosed: () => void;
+  onComandaSent?: () => void;
   onCanvasInfoChange?: (info: TableCanvasInfo) => void;
 }) {
   const [clients, setClients] = useState<TableOrderClient[]>([]);
@@ -884,6 +896,19 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   // Para cuentas separadas: items del scope y slots ya definidos
   const [splitState, setSplitState] = useState<{ scopeItems: TableOrderItem[]; slots: SplitSlot[]; slotIndex: number } | null>(null);
   const moreRef = useRef<HTMLDivElement>(null);
+  // Comanda
+  const [kitchenPrinter, setKitchenPrinter] = useState<string | null>(null);
+  const [comandaCopies, setComandaCopies] = useState(1);
+  const [sendingComanda, setSendingComanda] = useState(false);
+  const [comandaModal, setComandaModal] = useState<"client-select" | "reprint-client-select" | "reprint-options" | null>(null);
+  const [reprintClientId, setReprintClientId] = useState<string | null>(null);
+  const [devPreviewLines, setDevPreviewLines] = useState<string[] | null>(null);
+
+  // En dev, interceptar printComanda y mostrar preview
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    setDevComandaPreviewCallback((lines) => setDevPreviewLines(lines));
+  }, []);
 
   const reload = async (): Promise<TableOrderClient[]> => {
     const [c, byClient, dts] = await Promise.all([
@@ -919,6 +944,108 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [moreOpen]);
+
+  useEffect(() => {
+    void Promise.all([businessConfigService.load(), printerService.list()]).then(([settings, printers]) => {
+      const kitchen = settings.printerKitchen && printers.includes(settings.printerKitchen) ? settings.printerKitchen : null;
+      setKitchenPrinter(kitchen);
+      setComandaCopies(settings.comandaCopies > 0 ? settings.comandaCopies : 1);
+    });
+  }, []);
+
+  async function handleEnviarCocina(clientId: string | null) {
+    setSendingComanda(true);
+    try {
+      const activeClients = clients.filter((c) => c.id !== null);
+      const client = clientId ? (activeClients.find((c) => c.id === clientId) ?? null) : null;
+      const clientDelivery = client ? (deliveryTypes.find((d) => d.id === client.delivery_type_id) ?? null) : null;
+      const comanda = await comandaService.generateComanda({
+        tableOrderId: order.id,
+        tableName: table.name,
+        clientId: clientId,
+        clientName: client?.client_name ?? null,
+        customerNotes: order.notes,
+        isDelivery: !!clientDelivery,
+        deliveryPrice: clientDelivery?.price ?? null,
+      });
+      if (!comanda) { notify.success("No hay productos nuevos para enviar a cocina."); return; }
+      await comandaService.printComanda(comanda, kitchenPrinter ?? "", comandaCopies, activeClients.map((c) => ({ id: c.id, client_name: c.client_name, client_number: c.client_number })));
+      onComandaSent?.();
+      notify.success(`Comanda #${comanda.comanda_number} enviada a cocina.`);
+    } catch (err) {
+      notify.error(`Error al enviar comanda: ${String(err)}`);
+    } finally {
+      setSendingComanda(false);
+      setComandaModal(null);
+    }
+  }
+
+  async function handleReprintAll(clientId: string | null) {
+    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    setSendingComanda(true);
+    try {
+      const client = clientId ? (clients.find((c) => c.id === clientId) ?? null) : null;
+      const comanda = await comandaService.buildFullOrderComanda({
+        tableOrderId: order.id,
+        tableName: table.name,
+        clientId,
+        clientName: client?.client_name ?? null,
+        customerNotes: order.notes,
+        isDelivery: false,
+        deliveryPrice: null,
+      });
+      if (!comanda) { notify.success("No hay productos en la orden."); return; }
+      await comandaService.printComanda(comanda, kitchenPrinter ?? "", comandaCopies, clients.map((c) => ({ id: c.id, client_name: c.client_name, client_number: c.client_number })));
+      notify.success("Comanda completa reimpresa.");
+    } catch (err) {
+      notify.error(`Error al reimprimir: ${String(err)}`);
+    } finally {
+      setSendingComanda(false);
+      setComandaModal(null);
+      setReprintClientId(null);
+    }
+  }
+
+  async function handleReprintLast(clientId: string | null) {
+    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    setSendingComanda(true);
+    try {
+      const all = await comandaService.getAllComandas(order.id);
+      const last = all[all.length - 1] ?? null;
+      if (!last) { notify.success("No hay comandas enviadas para esta mesa."); return; }
+      await comandaService.printComanda(last, kitchenPrinter ?? "", comandaCopies, clients.map((c) => ({ id: c.id, client_name: c.client_name, client_number: c.client_number })));
+      notify.success(`Ultima comanda #${last.comanda_number} reimpresa.`);
+    } catch (err) {
+      notify.error(`Error al reimprimir: ${String(err)}`);
+    } finally {
+      setSendingComanda(false);
+      setComandaModal(null);
+      setReprintClientId(null);
+    }
+  }
+
+  async function openReprintMenu() {
+    setMoreOpen(false);
+    const hasComanda = await comandaService.hasComanda(order.id);
+    if (!hasComanda) { notify.success("No hay comandas enviadas para esta mesa."); return; }
+    const activeClients = clients.filter((c) => c.id !== null);
+    if (activeClients.length > 1) {
+      setComandaModal("reprint-client-select");
+    } else {
+      setReprintClientId(activeClients[0]?.id ?? null);
+      setComandaModal("reprint-options");
+    }
+  }
+
+  async function handleSendCocina() {
+    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    const activeClients = clients.filter((c) => c.id !== null);
+    if (activeClients.length > 1) {
+      setComandaModal("client-select");
+    } else {
+      await handleEnviarCocina(activeClients[0]?.id ?? null);
+    }
+  }
 
   async function handleCancelOrder() {
     setCancelling(true);
@@ -1092,11 +1219,17 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             <Button size="sm" colorPalette="purple" flex="1" onClick={() => { setAddProductsClientId(clients[0]?.id ?? null); setAddProductsModal(true); }}>
               <Plus size={14} />Agregar Productos
             </Button>
-            <Tip text="Se requiere impresora de cocina configurada">
-              <Button size="sm" colorPalette="orange" variant="outline" flex="1" disabled onClick={() => {}}>
-                Enviar a Cocina
+            {(kitchenPrinter || import.meta.env.DEV) ? (
+              <Button size="sm" colorPalette="orange" variant="outline" flex="1" loading={sendingComanda} disabled={!hasItems} onClick={() => void handleSendCocina()}>
+                <Flame size={14} />Enviar a Cocina
               </Button>
-            </Tip>
+            ) : (
+              <Tip text="Configura una impresora de cocina en Configuracion">
+                <Button size="sm" colorPalette="orange" variant="outline" flex="1" disabled onClick={() => {}}>
+                  Enviar a Cocina
+                </Button>
+              </Tip>
+            )}
           </Flex>
           <Flex gap="2" mt="2">
             {!hasItems ? (
@@ -1116,7 +1249,8 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
                 <MoreHorizontal size={15} />
               </Button>
               {moreOpen && (
-                <Box position="absolute" bottom="110%" right="0" bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" boxShadow="lg" py="1" minW="160px" zIndex="popover">
+                <Box position="absolute" bottom="110%" right="0" bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" boxShadow="lg" py="1" minW="170px" zIndex="popover">
+                  {(kitchenPrinter || import.meta.env.DEV) && <ContextMenuItem label="Reimprimir Comanda" onClick={() => void openReprintMenu()} />}
                   <ContextMenuItem label="Cerrar mesa" danger onClick={() => { setMoreOpen(false); setCancelConfirm(true); }} />
                 </Box>
               )}
@@ -1139,6 +1273,92 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
         </Flex>
       )}
 
+      {/* Comanda: selector de cliente para enviar */}
+      {comandaModal === "client-select" && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="380px" bg="white" borderRadius="md" p="6" boxShadow="2xl">
+            <Flex align="center" gap="3" mb="4"><Flame size={18} color="#ea580c" /><Text fontWeight="bold" fontSize="md">Enviar a Cocina</Text></Flex>
+            <Text color="gray.600" fontSize="sm" mb="4">Selecciona el cliente para filtrar la comanda, o envia todo el pedido:</Text>
+            <Stack gap="2">
+              <Button variant="outline" colorPalette="orange" onClick={() => void handleEnviarCocina(null)}>Todo el pedido</Button>
+              {clients.map((c) => (
+                <Button key={c.id} variant="outline" onClick={() => void handleEnviarCocina(c.id)}>
+                  {c.client_name ? `${c.client_name} (Cuenta ${c.client_number})` : `Cuenta ${c.client_number}`}
+                </Button>
+              ))}
+            </Stack>
+            <Flex justify="end" mt="4">
+              <Button variant="ghost" onClick={() => setComandaModal(null)}>Cancelar</Button>
+            </Flex>
+          </Box>
+        </Flex>
+      )}
+
+      {/* Reimprimir: selector de cliente (2+ clientes) */}
+      {comandaModal === "reprint-client-select" && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="380px" bg="white" borderRadius="md" p="6" boxShadow="2xl">
+            <Flex align="center" gap="3" mb="4"><Printer size={18} /><Text fontWeight="bold" fontSize="md">Reimprimir Comanda</Text></Flex>
+            <Text color="gray.600" fontSize="sm" mb="4">Selecciona el cliente o reimprimir todo el pedido:</Text>
+            <Stack gap="2">
+              <Button variant="outline" colorPalette="purple" onClick={() => { setReprintClientId(null); setComandaModal("reprint-options"); }}>Todo el pedido</Button>
+              {clients.map((c) => (
+                <Button key={c.id} variant="outline" onClick={() => { setReprintClientId(c.id); setComandaModal("reprint-options"); }}>
+                  {c.client_name ? `${c.client_name} (Cuenta ${c.client_number})` : `Cuenta ${c.client_number}`}
+                </Button>
+              ))}
+            </Stack>
+            <Flex justify="end" mt="4">
+              <Button variant="ghost" onClick={() => setComandaModal(null)}>Cancelar</Button>
+            </Flex>
+          </Box>
+        </Flex>
+      )}
+
+      {/* Reimprimir: opciones todo / ultima */}
+      {comandaModal === "reprint-options" && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="380px" bg="white" borderRadius="md" p="6" boxShadow="2xl">
+            <Flex align="center" gap="3" mb="4"><Printer size={18} /><Text fontWeight="bold" fontSize="md">Reimprimir Comanda</Text></Flex>
+            <Stack gap="2">
+              <Button variant="outline" colorPalette="purple" loading={sendingComanda} onClick={() => void handleReprintAll(reprintClientId)}>Todo el pedido (comanda completa)</Button>
+              <Button variant="outline" colorPalette="orange" loading={sendingComanda} onClick={() => void handleReprintLast(reprintClientId)}>Ultima comanda enviada</Button>
+            </Stack>
+            <Flex justify="end" mt="4">
+              <Button variant="ghost" onClick={() => setComandaModal(null)}>Cancelar</Button>
+            </Flex>
+          </Box>
+        </Flex>
+      )}
+
+      {/* Dev: preview de comanda */}
+      {import.meta.env.DEV && devPreviewLines && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="420px" bg="white" borderRadius="md" boxShadow="2xl" overflow="hidden">
+            <Flex px="4" py="3" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between">
+              <Flex align="center" gap="2"><Printer size={16} /><Text fontWeight="bold" fontSize="sm">Preview Comanda (DEV)</Text></Flex>
+              <Button size="xs" variant="ghost" onClick={() => setDevPreviewLines(null)}><X size={14} /></Button>
+            </Flex>
+            <Box
+              as="pre"
+              fontFamily="monospace"
+              fontSize="12px"
+              lineHeight="1.6"
+              p="4"
+              bg="gray.50"
+              overflowY="auto"
+              maxH="60vh"
+              whiteSpace="pre-wrap"
+            >
+              {devPreviewLines.join("\n")}
+            </Box>
+            <Flex px="4" py="3" justify="end" borderTopWidth="1px" borderColor="gray.200">
+              <Button size="sm" onClick={() => setDevPreviewLines(null)}>Cerrar</Button>
+            </Flex>
+          </Box>
+        </Flex>
+      )}
+
       {/* Add products modal */}
       {checkout === "selector" && (
         <CheckoutModeModal
@@ -1150,7 +1370,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
           onClose={() => setCheckout(null)}
           onCobrarTodo={() => setCheckout("todo")}
           onCobrarCliente={(clientId) => setCheckout(clientId)}
-          onCuentasSeparadas={(scopeItems) => { setSplitState({ scopeItems, slots: [{ id: "1", items: [], deliveryType: null }, { id: "2", items: [], deliveryType: null }], slotIndex: 0 }); setCheckout("split"); }}
+          onCuentasSeparadas={(scopeItems) => { setSplitState({ scopeItems, slots: [{ id: crypto.randomUUID(), items: [], deliveryType: null }, { id: crypto.randomUUID(), items: [], deliveryType: null }], slotIndex: 0 }); setCheckout("split"); }}
         />
       )}
 

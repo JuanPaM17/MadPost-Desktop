@@ -208,7 +208,7 @@ export const tableOrderService = {
 
   async updateItemNotes(itemId: string, notes: string | null): Promise<void> {
     const db = await databaseManager.database();
-    await db.execute("UPDATE table_order_items SET notes=$1 WHERE id=$2", [notes?.trim() || null, itemId]);
+    await db.execute("UPDATE table_order_items SET notes=$1, updated_at=$2 WHERE id=$3", [notes?.trim() || null, instantNow(), itemId]);
   },
 
   async getItemsByClient(orderId: string): Promise<Map<string, TableOrderItem[]>> {
@@ -224,7 +224,7 @@ export const tableOrderService = {
 
   async updateItemOption(itemId: string, selectedOption: string | null): Promise<void> {
     const db = await databaseManager.database();
-    await db.execute("UPDATE table_order_items SET selected_option=$1 WHERE id=$2", [selectedOption, itemId]);
+    await db.execute("UPDATE table_order_items SET selected_option=$1, updated_at=$2 WHERE id=$3", [selectedOption, instantNow(), itemId]);
   },
 
   async replaceItemAdditions(itemId: string, additions: { id: string; name: string; price: number; quantity: number }[]): Promise<void> {
@@ -243,7 +243,7 @@ export const tableOrderService = {
     if (rows.length) {
       const additionsTotal = additions.reduce((s, a) => s + a.price * a.quantity, 0);
       const newSubtotal = (rows[0].unit_price + additionsTotal) * rows[0].quantity;
-      await db.execute("UPDATE table_order_items SET subtotal=$1 WHERE id=$2", [newSubtotal, itemId]);
+      await db.execute("UPDATE table_order_items SET subtotal=$1, updated_at=$2 WHERE id=$3", [newSubtotal, instantNow(), itemId]);
     }
   },
 
@@ -256,6 +256,7 @@ export const tableOrderService = {
         [uuid(), itemId, s.id, s.name],
       );
     }
+    await db.execute("UPDATE table_order_items SET updated_at=$1 WHERE id=$2", [instantNow(), itemId]);
   },
 
   async addItem(params: {

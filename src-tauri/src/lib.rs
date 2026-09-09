@@ -13,7 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -86,6 +86,29 @@ fn save_and_open_invoice_pdf(app: tauri::AppHandle, session_number: u32, file_na
     fs::write(&target, bytes).map_err(|e| format!("No fue posible guardar la factura: {e}"))?;
     Command::new("explorer.exe").arg(&target).spawn().map_err(|e| format!("No fue posible abrir la factura: {e}"))?;
     Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn print_comanda(printer_name: String, lines: Vec<String>) -> Result<(), String> {
+    let mut bytes: Vec<u8> = Vec::new();
+    // ESC/POS init
+    bytes.extend_from_slice(&[0x1B, 0x40]);
+    // Center alignment
+    bytes.extend_from_slice(&[0x1B, 0x61, 0x01]);
+    for (i, line) in lines.iter().enumerate() {
+        // Bold on for first 3 lines (header: comanda number, table name, timestamp)
+        let bold = i < 3;
+        if bold { bytes.extend_from_slice(&[0x1B, 0x45, 0x01]); }
+        // Left alignment after header
+        if i == 3 { bytes.extend_from_slice(&[0x1B, 0x61, 0x00]); }
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        if bold { bytes.extend_from_slice(&[0x1B, 0x45, 0x00]); }
+    }
+    // Feed and cut
+    bytes.extend_from_slice(&[0x1B, 0x64, 0x04]);
+    bytes.extend_from_slice(&[0x1D, 0x56, 0x41, 0x00]);
+    send_raw_to_printer(&printer_name, &bytes)
 }
 
 #[tauri::command]

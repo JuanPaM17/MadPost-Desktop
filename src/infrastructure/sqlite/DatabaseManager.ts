@@ -139,7 +139,17 @@ const migrations = [
   `CREATE TABLE IF NOT EXISTS table_order_items (
     id TEXT PRIMARY KEY, table_order_id TEXT NOT NULL, product_id TEXT, product_name TEXT, quantity REAL, unit_price REAL,
     subtotal REAL, added_at TEXT, notes TEXT, selected_option TEXT, table_order_client_id TEXT, combo_id TEXT,
-    combo_table_order_item_id TEXT, original_unit_price REAL, category_name TEXT
+    combo_table_order_item_id TEXT, original_unit_price REAL, category_name TEXT, updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS comandas (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, table_order_id TEXT NOT NULL,
+    table_name TEXT, comanda_number INTEGER, created_at TEXT,
+    client_id TEXT, client_name TEXT, customer_notes TEXT, is_delivery INTEGER, delivery_price REAL
+  )`,
+  `CREATE TABLE IF NOT EXISTS comanda_items (
+    id TEXT PRIMARY KEY, comanda_id TEXT NOT NULL, product_name TEXT, quantity REAL,
+    additions_text TEXT, sauces_text TEXT, notes TEXT, selected_option TEXT,
+    category_name TEXT, subtotal REAL, combo_parent_id TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS table_order_item_additions (
     id TEXT PRIMARY KEY, table_order_item_id TEXT NOT NULL, addition_id TEXT, addition_name TEXT, price REAL, quantity REAL
@@ -209,6 +219,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "table_order_clients", "notes", "TEXT");
     await this.ensureColumn(database, "table_order_clients", "is_card", "INTEGER");
     await this.ensureColumn(database, "table_orders", "comanda_sent", "INTEGER");
+    await this.ensureColumn(database, "table_order_items", "updated_at", "TEXT");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     return database;
   }
