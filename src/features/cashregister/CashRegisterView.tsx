@@ -33,6 +33,7 @@ import {
   type CashSummary,
   type CashTopProduct,
 } from "./CashRegisterService";
+import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 
 export function CashRegisterView() {
   const current = sessionContext.current();
@@ -102,6 +103,26 @@ export function CashRegisterView() {
       setBusy(false);
     }
   }
+  async function requestClose() {
+    try {
+      const db = await databaseManager.database();
+      const rows = await db.select<{ total: number }[]>(
+        "SELECT COUNT(*) AS total FROM table_orders WHERE status='OPEN'",
+      );
+      const openTables = Number(rows[0]?.total ?? 0);
+      if (openTables > 0) {
+        notify.error(
+          "No fue posible cerrar la caja.",
+          `Hay ${openTables} mesa(s) con cuenta abierta. Cobralas antes de cerrar la caja.`,
+        );
+        return;
+      }
+    } catch {
+      // si falla la query de mesas dejamos pasar
+    }
+    setDialog("close");
+  }
+
   async function close(amount: number) {
     if (!open) return;
     setBusy(true);
@@ -148,7 +169,7 @@ export function CashRegisterView() {
       <StatusCard
         cash={open}
         onOpen={() => setDialog("open")}
-        onClose={() => setDialog("close")}
+        onClose={() => void requestClose()}
       />
       {open && summary ? <SummaryGrid summary={summary} /> : null}
       <Box mt="8" mb="4" maxW="420px" position="relative">

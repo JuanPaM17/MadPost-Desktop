@@ -26,6 +26,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rusqlite = "0.32"
 sha2 = "0.10"
 axum = { version = "0.8", features = ["ws"] }
+bcrypt = "0.15"
+jsonwebtoken = "9"
 mdns-sd = "0.11"
 tokio = { version = "1", features = ["net", "sync"] }
 tower-http = { version = "0.6", features = ["cors"] }

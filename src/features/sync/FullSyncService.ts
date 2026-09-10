@@ -23,17 +23,11 @@ export const FULL_SYNC_TABLES = [
   ["combos", columns(["id", "tenant_id", "name", "price", "image_path", "active::bool", "created_at", "updated_at"])],
   ["combo_items", columns(["id", "combo_id", "product_id", "quantity"])],
   ["cash_sessions", columns(["id", "tenant_id", "user_id", "session_number", "opening_amount", "closing_amount", "expected_amount", "status", "opened_at", "closed_at"])],
-  ["restaurant_tables", columns(["id", "tenant_id", "name", "shape", "width", "height", "pos_x", "pos_y", "type", "floor", "active::bool", "created_at", "updated_at"])],
   ["delivery_types", columns(["id", "tenant_id", "name", "price", "sort_order", "created_at", "updated_at"])],
   ["sales", columns(["id", "tenant_id", "user_id", "cash_session_id", "total", "payment_method", "cash_given", "change_given", "invoice_number", "notes", "created_at", "is_delivery", "table_order_id", "cash_amount", "card_amount", "discount_type", "discount_value", "subtotal", "delivery_price", "client_name", "collected_by_user_id", "collected_by_display_name", "delivery_type_id", "delivery_type_name"])],
   ["sale_items", columns(["id", "sale_id", "product_id", "product_name", "quantity", "unit_price", "subtotal", "notes", "selected_option", "combo_id", "combo_sale_item_id", "original_unit_price", "category_name"])],
   ["sale_item_additions", columns(["id", "sale_item_id", "addition_id", "addition_name", "price", "quantity"])],
   ["sale_item_sauces", columns(["id", "sale_item_id", "sauce_id", "sauce_name"])],
-  ["table_orders", columns(["id", "tenant_id", "table_id", "user_id", "cash_session_id", "client_name", "status", "opened_at", "closed_at", "notes", "customer_notes"])],
-  ["table_order_clients", columns(["id", "table_order_id", "client_name", "client_number", "status", "created_at", "delivery_type_id"])],
-  ["table_order_items", columns(["id", "table_order_id", "product_id", "product_name", "quantity", "unit_price", "subtotal", "added_at", "notes", "selected_option", "table_order_client_id", "combo_id", "combo_table_order_item_id", "original_unit_price", "category_name"])],
-  ["table_order_item_additions", columns(["id", "table_order_item_id", "addition_id", "addition_name", "price", "quantity"])],
-  ["table_order_item_sauces", columns(["id", "table_order_item_id", "sauce_id", "sauce_name"])],
   ["stock_logs", columns(["id", "tenant_id", "user_id", "user_name", "item_type", "item_id", "item_name", "delta", "stock_before", "stock_after", "created_at"])],
 ] as const satisfies readonly (readonly [string, readonly ColumnSpec[]])[];
 
@@ -64,15 +58,15 @@ class FullSyncService {
     if (this.cancelled) return { ok: false, completedTables: 0, progress };
 
     const result = await this.syncAll(onProgress, progress);
+    const syncedAt = new Date().toISOString();
     if (result.ok) {
       const database = await databaseManager.database();
       await database.execute("DELETE FROM sync_queue");
       await database.execute("DELETE FROM pending_deletes");
-      const syncedAt = new Date().toISOString();
-      await tenantRepository.updateLastSyncedAt(tenantId, syncedAt);
-      const { error } = await client.from("tenants").update({ last_synced_at: syncedAt }).eq("id", tenantId);
-      if (error) runtimeLogger.error("FullSyncService", "No se pudo actualizar last_synced_at remoto.", error);
     }
+    await tenantRepository.updateLastSyncedAt(tenantId, syncedAt);
+    const { error } = await client.from("tenants").update({ last_synced_at: syncedAt }).eq("id", tenantId);
+    if (error) runtimeLogger.error("FullSyncService", "No se pudo actualizar last_synced_at remoto.", error);
     return result;
   }
 
@@ -101,7 +95,8 @@ class FullSyncService {
         let processed = 0;
         for (let index = 0; index < rows.length; index += BATCH_SIZE) {
           if (this.cancelled) throw new Error("SYNC_CANCELLED");
-          const batch = rows.slice(index, index + BATCH_SIZE).map((row) => toRemoteRow(row, tableColumns));
+          const batch = rows.slice(index, index + BATCH_SIZE).filter((row) => hasValidIds(row, tableColumns)).map((row) => toRemoteRow(row, tableColumns));
+          if (!batch.length) { processed += Math.min(BATCH_SIZE, rows.length - index); continue; }
           const { error } = await client.from(tableName).upsert(batch);
           if (error) throw new Error(error.message);
           processed += batch.length;
@@ -121,8 +116,35 @@ class FullSyncService {
   }
 }
 
+// Columns that are NOT NULL in Supabase but nullable in local SQLite — coerce null to a safe default.
+const COERCE_NULL: Record<string, string | number | boolean> = {
+  delivery_price: 0,
+};
+
 function toRemoteRow(row: Record<string, unknown>, specifications: readonly ColumnSpec[]) {
-  return Object.fromEntries(specifications.map(({ name, boolean }) => [name, boolean && row[name] !== null && row[name] !== undefined ? Number(row[name]) !== 0 : row[name] ?? null]));
+  return Object.fromEntries(specifications.map(({ name, boolean }) => {
+    const raw = row[name];
+    if (boolean) {
+      // SQLite stores booleans as INTEGER 0/1; null means false (safer than rejecting)
+      return [name, raw !== null && raw !== undefined ? Number(raw) !== 0 : false];
+    }
+    if (raw === null || raw === undefined) {
+      return [name, name in COERCE_NULL ? COERCE_NULL[name] : null];
+    }
+    return [name, raw];
+  }));
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function hasValidIds(row: Record<string, unknown>, specifications: readonly ColumnSpec[]): boolean {
+  for (const { name } of specifications) {
+    if ((name === "id" || name.endsWith("_id")) && row[name] !== null && row[name] !== undefined) {
+      const val = String(row[name]);
+      if (val.includes(":") && !UUID_RE.test(val)) return false;
+    }
+  }
+  return true;
 }
 function logLine(message: string) { return `${new Date().toISOString()} - ${message}`; }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }

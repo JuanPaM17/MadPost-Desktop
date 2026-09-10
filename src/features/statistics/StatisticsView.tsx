@@ -6,6 +6,8 @@ import { cashRegisterService, type CashSession } from "../cashregister/CashRegis
 import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { sessionContext } from "../../core/session/SessionContext";
+import * as XLSX from "xlsx-js-style";
+import { excelService } from "../export/ExcelService";
 
 type Filters = { sessionId: string | null; dateFrom: string; dateTo: string };
 
@@ -141,6 +143,43 @@ async function loadByHour(filters: Filters): Promise<HourPoint[]> {
     result.push({ hour: h, label: `${h12}${ampm}`, revenue: map.get(h)?.revenue ?? 0, count: map.get(h)?.count ?? 0 });
   }
   return result;
+}
+
+type DayFilterPoint = { label: string; revenue: number; count: number };
+
+async function loadByDay(filters: Filters): Promise<DayFilterPoint[]> {
+  const db = await databaseManager.database();
+  const session = sessionContext.current();
+  if (!session) return [];
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.sessionId) {
+    conditions.push("s.cash_session_id=$" + params.push(filters.sessionId));
+  } else {
+    conditions.push("s.tenant_id=$" + params.push(session.tenantId));
+    if (filters.dateFrom) conditions.push("s.created_at >= $" + params.push(filters.dateFrom + "T00:00:00.000Z"));
+    const to = filters.dateTo || todayIso();
+    conditions.push("s.created_at <= $" + params.push(to + "T23:59:59.999Z"));
+  }
+
+  const where = "WHERE " + conditions.join(" AND ");
+
+  const rows = await db.select<{ day: string; revenue: number; count: number }[]>(
+    `SELECT DATE(s.created_at, 'localtime') AS day,
+            COALESCE(SUM(s.total), 0) AS revenue,
+            COUNT(*) AS count
+     FROM sales s ${where}
+     GROUP BY day ORDER BY day ASC`,
+    params,
+  );
+
+  return rows.map((r) => ({
+    label: formatDay(r.day),
+    revenue: Number(r.revenue),
+    count: Number(r.count),
+  }));
 }
 
 type ProductOption = { option: string | null; qty: number; subtotal: number };
@@ -373,11 +412,163 @@ async function loadStats(filters: Filters): Promise<Stats> {
   };
 }
 
+function fmtColNumber(n: number): string {
+  return Math.round(n).toLocaleString("es-CO");
+}
+
+function fmtColAvg(n: number): string {
+  return n.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+const HEADER_STYLE = {
+  fill: { patternType: "solid", fgColor: { rgb: "6366F1" } },
+  font: { bold: true, color: { rgb: "FFFFFF" } },
+  border: { bottom: { style: "thin", color: { rgb: "4F46E5" } } },
+};
+
+function makeAoaSheet(rows: (string | number | null)[][]): XLSX.WorkSheet {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  return ws;
+}
+
+function setRowStyle(ws: XLSX.WorkSheet, rowIndex: number, colCount: number, style: object) {
+  for (let c = 0; c < colCount; c++) {
+    const addr = XLSX.utils.encode_cell({ r: rowIndex, c });
+    if (ws[addr]) ws[addr].s = style;
+  }
+}
+
+function setColWidths(ws: XLSX.WorkSheet, widths: number[]) {
+  ws["!cols"] = widths.map((w) => ({ wch: w }));
+}
+
+async function exportToExcel(
+  filters: Filters,
+  stats: Stats,
+  hourData: HourPoint[],
+  products: ProductRow[],
+  additions: AdditionRow[],
+  categories: CategoryRow[],
+  sellers: SellerRow[],
+  filterLabels: string[],
+) {
+  const dayData = await loadByDay(filters);
+  const periodLabel = filterLabels.length > 0 ? filterLabels.join(" · ") : "Todos los periodos";
+
+  // ── Hoja 1: Resumen ───────────────────────────────────────────
+  const resumenRows: (string | number | null)[][] = [
+    ["Periodo", periodLabel],
+    [],
+    ["Metrica", "Valor"],
+    ["Total ventas", fmtColNumber(stats.totalCount)],
+    ["Ingresos totales", fmtColNumber(stats.totalRevenue)],
+    ["Venta promedio", fmtColAvg(stats.avgSale)],
+    ["Total efectivo", fmtColNumber(stats.cashTotal)],
+    ["Total tarjeta", fmtColNumber(stats.cardTotal)],
+    ["Ventas con tarjeta", fmtColNumber(stats.cardCount)],
+    ["Ventas mesa", fmtColNumber(stats.tableCount)],
+    ["Ingresos mesa", fmtColNumber(stats.tableTotal)],
+    ["Ventas domicilio", fmtColNumber(stats.deliveryCount)],
+    ["Ingresos domicilio", fmtColNumber(stats.deliveryTotal)],
+    ["Cobro domicilio total", fmtColNumber(stats.deliveryFeeTotal)],
+    ["Dom. efectivo (#)", fmtColNumber(stats.deliveryCashCount)],
+    ["Dom. efectivo ($)", fmtColNumber(stats.deliveryCashTotal)],
+    ["Dom. tarjeta (#)", fmtColNumber(stats.deliveryCardCount)],
+    ["Dom. tarjeta ($)", fmtColNumber(stats.deliveryCardTotal)],
+  ];
+  const ws1 = makeAoaSheet(resumenRows);
+  setColWidths(ws1, [28, 30]);
+  // Fila de encabezado de tabla (índice 2)
+  setRowStyle(ws1, 2, 2, HEADER_STYLE);
+
+  // ── Hoja 2: Por dia y hora ────────────────────────────────────
+  const dayHeader = ["Fecha", "# Ventas", "Ingresos"];
+  const dayRows: (string | number | null)[][] = [
+    dayHeader,
+    ...dayData.map((d) => [d.label, fmtColNumber(d.count), fmtColNumber(d.revenue)]),
+    [],
+    [],
+  ];
+  const hourHeader = ["Hora", "# Ventas", "Ingresos"];
+  dayRows.push(hourHeader);
+  for (const h of hourData) {
+    if (h.count > 0) dayRows.push([h.label, fmtColNumber(h.count), fmtColNumber(h.revenue)]);
+  }
+  const ws2 = makeAoaSheet(dayRows);
+  setColWidths(ws2, [22, 14, 20]);
+  setRowStyle(ws2, 0, 3, HEADER_STYLE);
+  const hourHeaderRow = 1 + dayData.length + 2;
+  setRowStyle(ws2, hourHeaderRow, 3, HEADER_STYLE);
+
+  // ── Hoja 3: Productos ─────────────────────────────────────────
+  const prodRows: (string | number | null)[][] = [["Producto", "Opcion", "Cantidad", "Ingresos"]];
+  for (const p of products) {
+    prodRows.push([p.name, "", fmtColNumber(p.qty), fmtColNumber(p.subtotal)]);
+    const hasOptions = p.options.length > 1 || (p.options.length === 1 && p.options[0].option !== null);
+    if (hasOptions) {
+      for (const opt of p.options) {
+        prodRows.push([p.name, `\u00BB ${opt.option ?? "Sin opcion"}`, fmtColNumber(opt.qty), fmtColNumber(opt.subtotal)]);
+      }
+    }
+  }
+  const ws3 = makeAoaSheet(prodRows);
+  setColWidths(ws3, [32, 22, 14, 20]);
+  setRowStyle(ws3, 0, 4, HEADER_STYLE);
+  // Sub-filas de opciones en gris claro
+  for (let i = 1; i < prodRows.length; i++) {
+    const row = prodRows[i];
+    if (typeof row[1] === "string" && row[1].startsWith("\u00BB")) {
+      setRowStyle(ws3, i, 4, { font: { color: { rgb: "64748B" }, italic: true } });
+    }
+  }
+
+  // ── Hoja 4: Adiciones ─────────────────────────────────────────
+  const addRows: (string | number | null)[][] = [
+    ["Adicion", "Cantidad", "Ingresos"],
+    ...additions.map((a) => [a.name, fmtColNumber(a.qty), fmtColNumber(a.subtotal)]),
+  ];
+  const ws4 = makeAoaSheet(addRows);
+  setColWidths(ws4, [32, 14, 20]);
+  setRowStyle(ws4, 0, 3, HEADER_STYLE);
+
+  // ── Hoja 5: Categorias ────────────────────────────────────────
+  const totalCatRevenue = categories.reduce((acc, c) => acc + c.subtotal, 0);
+  const catRows: (string | number | null)[][] = [
+    ["Categoria", "Cantidad", "Ingresos", "%"],
+    ...categories.map((c) => {
+      const pct = totalCatRevenue > 0 ? ((c.subtotal / totalCatRevenue) * 100).toFixed(1) + "%" : "0.0%";
+      return [c.name, fmtColNumber(c.qty), fmtColNumber(c.subtotal), pct];
+    }),
+  ];
+  const ws5 = makeAoaSheet(catRows);
+  setColWidths(ws5, [28, 14, 20, 10]);
+  setRowStyle(ws5, 0, 4, HEADER_STYLE);
+
+  // ── Hoja 6: Vendedores ────────────────────────────────────────
+  const selRows: (string | number | null)[][] = [
+    ["Vendedor", "# Ventas", "Ingresos"],
+    ...sellers.map((s) => [s.name, fmtColNumber(s.count), fmtColNumber(s.total)]),
+  ];
+  const ws6 = makeAoaSheet(selRows);
+  setColWidths(ws6, [28, 14, 20]);
+  setRowStyle(ws6, 0, 3, HEADER_STYLE);
+
+  await excelService.exportRawSheets(`Estadisticas_MadPost_${todayIso()}`, [
+    { name: "Resumen", ws: ws1 },
+    { name: "Por dia y hora", ws: ws2 },
+    { name: "Productos", ws: ws3 },
+    { name: "Adiciones", ws: ws4 },
+    { name: "Categorias", ws: ws5 },
+    { name: "Vendedores", ws: ws6 },
+  ]);
+}
+
 export function StatisticsView() {
   const [sessions, setSessions] = useState<CashSession[]>([]);
   const [filters, setFilters] = useState<Filters>({ sessionId: null, dateFrom: "", dateTo: "" });
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [stats, setStats] = useState<Stats>(EMPTY_STATS);
   const [chartData, setChartData] = useState<DayPoint[]>([]);
   const [hourData, setHourData] = useState<HourPoint[]>([]);
@@ -444,8 +635,17 @@ export function StatisticsView() {
         <Button variant="outline" onClick={() => setFiltersOpen(true)}>
           <Filter size={17} />Filtros
         </Button>
-        <Button colorPalette="green" variant="outline" onClick={() => {}}>
-          <Download size={17} />Exportar Excel
+        <Button
+          colorPalette="green"
+          variant="outline"
+          disabled={exporting}
+          onClick={() => {
+            setExporting(true);
+            void exportToExcel(filters, stats, hourData, products, additions, categories, sellers, filterLabels)
+              .finally(() => setExporting(false));
+          }}
+        >
+          <Download size={17} />{exporting ? "Exportando..." : "Exportar Excel"}
         </Button>
         {loading && <Spinner size="sm" />}
       </Flex>

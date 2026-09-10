@@ -1,3 +1,4 @@
+mod api;
 mod backup_cli;
 mod r2_native;
 mod mobile_api;
@@ -59,7 +60,9 @@ fn save_export_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("No se selecciono un archivo de destino.".to_string());
     }
-    fs::write(path, bytes).map_err(|error| format!("No fue posible guardar el archivo: {error}"))
+    fs::write(&path, bytes).map_err(|error| format!("No fue posible guardar el archivo: {error}"))?;
+    Command::new("explorer.exe").arg(&path).spawn().map_err(|error| format!("No fue posible abrir el archivo: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]

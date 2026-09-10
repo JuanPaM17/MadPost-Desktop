@@ -113,11 +113,18 @@ class AuthService {
 
   async deletionCheck(user: LocalUser) {
     const database = await databaseManager.database();
-    const [cash, tables] = await Promise.all([
+    const [cashOpen, tables, cashAny, stockLogs] = await Promise.all([
       database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM cash_sessions WHERE user_id=$1 AND status='OPEN'", [user.id]),
       database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM table_orders WHERE user_id=$1 AND status='OPEN'", [user.id]),
+      database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM cash_sessions WHERE user_id=$1", [user.id]),
+      database.select<{ total: number }[]>("SELECT COUNT(*) AS total FROM stock_logs WHERE user_id=$1", [user.id]),
     ]);
-    const reason = (cash[0]?.total ?? 0) > 0 ? "Tiene caja abierta" : (tables[0]?.total ?? 0) > 0 ? "Tiene mesa abierta" : null;
+    const reason =
+      (cashOpen[0]?.total ?? 0) > 0 ? "Tiene una caja abierta" :
+      (tables[0]?.total ?? 0) > 0 ? "Tiene una mesa abierta" :
+      (cashAny[0]?.total ?? 0) > 0 ? "Tiene cajas registradas en el historial. Desactiva el usuario en lugar de eliminarlo" :
+      (stockLogs[0]?.total ?? 0) > 0 ? "Tiene movimientos de inventario registrados. Desactiva el usuario en lugar de eliminarlo" :
+      null;
     return { canDelete: reason === null, reason };
   }
 

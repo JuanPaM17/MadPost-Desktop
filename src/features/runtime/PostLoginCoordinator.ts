@@ -62,7 +62,7 @@ class PostLoginCoordinator {
     if (this.activeTenantId) await this.stop();
     this.activeTenantId = context.tenantId;
     runtimeLogger.info("PostLoginCoordinator", "Iniciando servicios posteriores al login.", { tenantId: context.tenantId, syncEnabled: context.syncEnabled });
-    const mobileEnabled = await mobileDevicesService.loadAutoStart().catch(() => false);
+    const mobileEnabled = import.meta.env.DEV && await mobileDevicesService.loadAutoStart().catch(() => false);
     for (const service of this.services) {
       if (!mobileEnabled && (service instanceof MadPostApiServer || service instanceof MdnsPublisher)) {
         runtimeLogger.info("PostLoginCoordinator", "Servidor local omitido por configuracion.", {});
