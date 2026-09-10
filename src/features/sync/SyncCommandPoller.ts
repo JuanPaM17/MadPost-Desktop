@@ -69,9 +69,27 @@ class SyncCommandPoller {
       const elapsed = `${String(Math.floor(durationSecs / 60)).padStart(2, "0")}:${String(durationSecs % 60).padStart(2, "0")}`;
       const resultSummary = result.ok ? `${result.completedTables}/${fullSyncService.tables.length} tablas OK - ${elapsed}` : `Error en sync - ${result.completedTables}/${fullSyncService.tables.length} tablas OK`;
       const backup = await backupService.createBackup(context.tenantId);
+      // Deduplicar: quedarse con la ultima entrada por tabla (estado final)
+      const finalByTable = new Map<string, TableSyncProgress>();
+      for (const entry of progress) finalByTable.set(entry.tableName, entry);
+      const syncLog = Array.from(finalByTable.values()).map((entry) => ({
+        table: entry.tableName,
+        status: entry.status.toLowerCase(),
+        records: entry.totalRecords,
+        ...(entry.error ? { error: entry.error } : {}),
+        log: entry.logLines.map((line) => {
+          const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/.exec(line);
+          if (!match) return line;
+          const d = new Date(match[1]);
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          const ss = String(d.getSeconds()).padStart(2, "0");
+          return `${hh}:${mm}:${ss} \u2014 ${line.replace(/^\S+ - /, "")}`;
+        }),
+      }));
       await this.patchCommand(commandId, {
         status: result.ok ? "done" : "error", finished_at: new Date().toISOString(), duration_secs: durationSecs,
-        result_summary: resultSummary, sync_log_json: JSON.stringify(progress), backup_ok: backup.uploadedToR2,
+        result_summary: resultSummary, sync_log_json: JSON.stringify(syncLog), backup_ok: backup.uploadedToR2,
         backup_error: backup.error,
       });
       runtimeLogger.info("SyncCommandPoller", "Comando finalizado.", { commandId, resultSummary, backupOk: backup.uploadedToR2 });

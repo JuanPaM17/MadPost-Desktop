@@ -184,7 +184,7 @@ class SaleService {
     const createdAt = now();
     const invoiceNumber = await nextInvoiceNumber(database, tenantId);
     const isDelivery = !!req.delivery;
-    const deliveryPrice = req.delivery?.type.price ?? null;
+    const deliveryPrice = req.delivery?.type.price ?? 0;
     const cashGiven = req.cashGiven ?? null;
     const changeGiven = req.changeGiven ?? null;
     const cashAmount = req.paymentMethod === "SPLIT" ? (req.cashAmount ?? null) : null;

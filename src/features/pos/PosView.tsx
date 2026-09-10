@@ -344,8 +344,8 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
               onConfirmed();
               onClose();
               // WhatsApp si domicilio
-              if (selectedDelivery && bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
-                const shouldSend = bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" || bizSettings.deliveryWhatsapp === "TODAS";
+              if (bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
+                const shouldSend = bizSettings.deliveryWhatsapp === "TODAS" || (bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" && !!selectedDelivery);
                 if (shouldSend) {
                   try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.phone, bizSettings.name, result.invoiceNumber, req, additions, sauces) }); } catch { /* non-fatal */ }
                 }

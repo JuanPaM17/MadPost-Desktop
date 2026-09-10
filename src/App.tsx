@@ -1,6 +1,7 @@
 import { Box, Button, Flex, Heading, Spinner, Text } from "@chakra-ui/react";
 import { useEffect, useRef, useState } from "react";
 import { startApplication } from "./app/ApplicationBootstrap";
+import { migrationService, type MigrationProgress } from "./features/migration/MigrationService";
 import type { LocalUser } from "./core/types";
 import { authService } from "./features/auth/AuthService";
 import { LoginView, SetupView, type SetupValues } from "./features/auth/AuthView";
@@ -15,7 +16,7 @@ import { UpdateDialog } from "./features/update/UpdateDialog";
 import { updateService, type UpdateInfo } from "./features/update/UpdateService";
 import { sessionContext } from "./core/session/SessionContext";
 
-type Screen = "loading" | "license" | "login" | "recovery" | "setup" | "main";
+type Screen = "loading" | "migrating" | "license" | "login" | "recovery" | "setup" | "main";
 
 function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -24,12 +25,30 @@ function App() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
+  const [migrationProgress, setMigrationProgress] = useState<MigrationProgress | null>(null);
+  const [migrationCountdown, setMigrationCountdown] = useState<number | null>(null);
   const updateDecision = useRef<(() => void) | null>(null);
 
   useEffect(() => { void boot(); }, []);
 
   async function boot() {
     setScreen("loading");
+    if (await migrationService.isMigrated() && await migrationService.javaDbExists() && await migrationService.hasChanges()) {
+      setScreen("migrating");
+      await migrationService.bootCheck((p) => setMigrationProgress(p));
+      await new Promise<void>((resolve) => {
+        let secs = 5;
+        setMigrationProgress({ phase: "done" });
+        setMigrationCountdown(secs);
+        const interval = setInterval(() => {
+          secs -= 1;
+          setMigrationCountdown(secs);
+          if (secs <= 0) { clearInterval(interval); resolve(); }
+        }, 1000);
+      });
+      window.location.reload();
+      return;
+    }
     const result = await startApplication(() => { setTenant({ id: "", name: "" }); setOnline(false); setScreen("license"); });
     if (result.screen === "license") { setOnline(result.online); setScreen("license"); return; }
     setTenant({ id: result.tenantId, name: result.tenantName });
@@ -71,6 +90,7 @@ function App() {
   }
 
   const content = screen === "loading" ? <LoadingView />
+    : screen === "migrating" ? <MigratingView progress={migrationProgress} countdown={migrationCountdown} />
     : screen === "license" ? <LicenseView online={online} onActivate={activate} onRetry={async () => setOnline(await licenseService.isReachable())} />
     : screen === "login" ? <LoginView tenantName={tenant.name} onLogin={async (username, password) => { await showMain(await authService.login(tenant.id, username, password)); }} onRecovery={() => setScreen("recovery")} />
     : screen === "recovery" ? <RecoveryView onRecover={recover} onBack={() => setScreen("login")} />
@@ -81,6 +101,26 @@ function App() {
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
     {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={pendingUpdate.forced ? undefined : () => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={() => updateService.install(pendingUpdate)} /> : null}
   </>;
+}
+
+function MigratingView({ progress, countdown }: { progress: MigrationProgress | null; countdown: number | null }) {
+  const label = !progress ? "Preparando..."
+    : progress.phase === "checking" ? "Verificando datos..."
+    : progress.phase === "copying" ? `Sincronizando datos... ${progress.percent}%`
+    : progress.phase === "done" ? countdown !== null ? `Datos actualizados. Reiniciando en ${countdown} segundo${countdown !== 1 ? "s" : ""}...` : "Listo"
+    : progress.phase === "error" ? `Error: ${progress.message}`
+    : "Sin fuente";
+  const percent = progress?.phase === "copying" ? progress.percent : progress?.phase === "done" ? 100 : 0;
+  return (
+    <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50">
+      <Box w="64px" h="64px" borderRadius="md" bg="#6366f1" color="white" display="grid" placeItems="center" fontSize="28px" fontWeight="bold">M</Box>
+      <Heading mt="6" size="lg">MadPost</Heading>
+      <Text mt="2" color="gray.500">{label}</Text>
+      <Box mt="5" w="280px" h="6px" bg="gray.200" borderRadius="full" overflow="hidden">
+        <Box h="full" bg="#6366f1" borderRadius="full" style={{ width: `${percent}%`, transition: "width 0.3s ease" }} />
+      </Box>
+    </Flex>
+  );
 }
 
 function LoadingView() {

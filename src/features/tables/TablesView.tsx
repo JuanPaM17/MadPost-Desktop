@@ -2295,8 +2295,8 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
 
       notify.success(`Factura #${result.invoiceNumber}`, result.changeGiven > 0 ? `Cambio: ${fmtMoney(result.changeGiven)}` : undefined);
 
-      if (selectedDelivery && bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
-        const shouldSend = bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" || bizSettings.deliveryWhatsapp === "TODAS";
+      if (bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
+        const shouldSend = bizSettings.deliveryWhatsapp === "TODAS" || (bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" && !!selectedDelivery);
         if (shouldSend) {
           try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.phone, bizSettings.name, result.invoiceNumber, req, allAdditions, allSauces) }); } catch { /* non-fatal */ }
         }

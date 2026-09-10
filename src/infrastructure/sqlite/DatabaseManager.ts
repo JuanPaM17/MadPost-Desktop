@@ -23,6 +23,7 @@ const migrations = [
     invoice_footer TEXT,
     max_sauces INTEGER,
     last_synced_at TEXT,
+    react_migrated INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -193,17 +194,55 @@ const migrations = [
 
 class DatabaseManager {
   private databasePromise: Promise<SqliteDatabase> | null = null;
+  private secondaryPromise: Promise<SqliteDatabase> | null = null;
+  private _dualWriteEnabled = false;
+
+  enableDualWrite() { this._dualWriteEnabled = true; }
+  disableDualWrite() { this._dualWriteEnabled = false; this.secondaryPromise = null; }
+
+  /** Cierra y resetea la conexion principal (usar tras reemplazar el archivo de DB). */
+  async resetPrimary() {
+    if (this.databasePromise) {
+      const db = await this.databasePromise.catch(() => null);
+      if (db) await db.close().catch(() => {});
+      this.databasePromise = null;
+    }
+  }
 
   async database(): Promise<SqliteDatabase> {
     if (!this.databasePromise) {
-      this.databasePromise = this.openAndMigrate();
+      this.databasePromise = this.openAndMigrate("sqlite:madpost.db");
     }
+    const primary = await this.databasePromise;
+    if (!this._dualWriteEnabled) return primary;
 
-    return this.databasePromise;
+    const secondary = await this.secondaryDatabase();
+    return new Proxy(primary, {
+      get(target, prop) {
+        if (prop === "execute") {
+          return async (sql: string, values?: unknown[]) => {
+            const result = await (target.execute as (sql: string, values?: unknown[]) => Promise<unknown>)(sql, values);
+            (secondary.execute as (sql: string, values?: unknown[]) => Promise<unknown>)(sql, values).catch(() => {});
+            return result;
+          };
+        }
+        return (target as unknown as Record<string | symbol, unknown>)[prop];
+      },
+    }) as SqliteDatabase;
   }
 
-  private async openAndMigrate(): Promise<SqliteDatabase> {
-    const database = await Database.load("sqlite:madpost.db");
+  async secondaryDatabase(): Promise<SqliteDatabase> {
+    if (!this.secondaryPromise) {
+      const { appDataDir, join } = await import("@tauri-apps/api/path");
+      const base = await appDataDir();
+      const javaDbPath = await join(base, "..", "MadPost", "madpost.db");
+      this.secondaryPromise = Database.load(`sqlite:${javaDbPath}`);
+    }
+    return this.secondaryPromise;
+  }
+
+  private async openAndMigrate(path: string): Promise<SqliteDatabase> {
+    const database = await Database.load(path);
     await this.migrateLegacySyncQueue(database);
     for (const statement of migrations) {
       await database.execute(statement);
@@ -221,6 +260,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "table_order_clients", "is_card", "INTEGER");
     await this.ensureColumn(database, "table_orders", "comanda_sent", "INTEGER");
     await this.ensureColumn(database, "table_order_items", "updated_at", "TEXT");
+    await this.ensureColumn(database, "tenants", "react_migrated", "INTEGER NOT NULL DEFAULT 0");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     return database;
   }
