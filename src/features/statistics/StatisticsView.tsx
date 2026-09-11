@@ -796,8 +796,8 @@ function RevenueChart({ data }: { data: DayPoint[] }) {
     tooltip: {
       y: {
         title: { formatter: () => "Ingresos:" },
-        formatter: (_v, { dataPointIndex }) => {
-          const pt = data[dataPointIndex];
+        formatter: (_v, opts?: { dataPointIndex?: number }) => {
+          const pt = data[opts?.dataPointIndex ?? 0];
           return "$" + Math.round(pt?.revenue ?? 0).toLocaleString("es-CO");
         },
       },
@@ -842,8 +842,8 @@ function HourChart({ data }: { data: HourPoint[] }) {
     tooltip: {
       y: {
         title: { formatter: () => "Ingresos:" },
-        formatter: (_v, { dataPointIndex }) => {
-          const pt = data[dataPointIndex];
+        formatter: (_v, opts?: { dataPointIndex?: number }) => {
+          const pt = data[opts?.dataPointIndex ?? 0];
           return "$" + Math.round(pt?.revenue ?? 0).toLocaleString("es-CO");
         },
       },

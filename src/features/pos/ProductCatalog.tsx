@@ -393,7 +393,7 @@ function MiniCart({ items, additions, sauces, onRemove, onEditAdditions, onEditS
                     <Text fontSize="sm" fontWeight="semibold" truncate>{item.quantity > 1 ? `${item.quantity}x ` : ""}{item.name}</Text>
                     {item.kind === "combo" ? <Badge size="xs" colorPalette="blue" variant="subtle" mt="0.5">Combo</Badge> : null}
                   </Box>
-                  <Button size="xs" variant="ghost" colorPalette="red" shrink="0" onClick={() => onRemove(item.key)}><Trash2 size={13} /></Button>
+                  <Button size="xs" variant="ghost" colorPalette="red" flexShrink="0" onClick={() => onRemove(item.key)}><Trash2 size={13} /></Button>
                 </Flex>
                 {item.options.length > 0
                   ? <Button size="xs" variant="ghost" colorPalette="orange" mt="0.5" onClick={() => onEditOption(item.key)}>Opcion: {item.selectedOption ?? "—"}</Button>
@@ -863,7 +863,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
             setPending({ ...pending });
           }}
           onConfirm={handleAdditionsDone}
-          confirmLabel={pending.item.showSauces && sauces.length > 0 ? "Siguiente: Salsas" : "Agregar"}
+          confirmLabel={pending.item.kind === "product" && pending.item.showSauces && sauces.length > 0 ? "Siguiente: Salsas" : "Agregar"}
         />
       ) : null}
 

@@ -5,7 +5,7 @@ export type PosCategory = { id: string; name: string };
 export type PosProduct = { id: string; name: string; description: string | null; price: number; originalPrice: number; categoryId: string | null; categoryName: string | null; showAdditions: boolean; showSauces: boolean; stock: number | null; options: string[] };
 export type PosAddition = { id: string; name: string; price: number; stock: number | null };
 export type PosSauce = { id: string; name: string };
-export type PosComboItem = { productId: string; name: string; quantity: number; showAdditions: boolean; showSauces: boolean; options: string[] };
+export type PosComboItem = { productId: string; name: string; quantity: number; showAdditions: boolean; showSauces: boolean; options: string[]; selectedOption?: string | null };
 export type PosCombo = { id: string; name: string; price: number; items: PosComboItem[] };
 
 class PosService {

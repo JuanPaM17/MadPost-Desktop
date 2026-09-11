@@ -87,7 +87,7 @@ class SyncService {
     if (typeof payload.id === "string" && !UUID_RE.test(payload.id)) {
       const database = await databaseManager.database();
       await database.execute("UPDATE sync_queue SET retry_count = 99 WHERE id = $1", [entry.id]);
-      runtimeLogger.error("SyncService", `Entrada descartada por id invalido en payload. id=${entry.id} tabla=${entry.table_name} payloadId=${payload.id as string}`);
+      runtimeLogger.error("SyncService", `Entrada descartada por id invalido en payload. id=${entry.id} tabla=${entry.table_name} payloadId=${payload.id as string}`, null);
       return;
     }
 

@@ -28,28 +28,28 @@ export async function exportProductos(): Promise<boolean> {
   const tid = tenantId();
 
   const [categorias, productos, adiciones, insumos, insumosProd, combos, comboItems, opciones, salsas] = await Promise.all([
-    db.select<Record<string, unknown>[]>("SELECT name AS Nombre, sort_order AS Orden FROM categories WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
-    db.select<Record<string, unknown>[]>(
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, sort_order AS Orden FROM categories WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>(
       `SELECT p.name AS Nombre, COALESCE(c.name,'') AS Categoria, p.price AS Precio,
               p.stock AS "Stock Directo", CASE WHEN p.active=1 THEN 'Si' ELSE 'No' END AS Activo, COALESCE(p.description,'') AS Descripcion
        FROM products p LEFT JOIN categories c ON c.id=p.category_id
        WHERE p.tenant_id=$1 ORDER BY p.name COLLATE NOCASE`, [tid]),
-    db.select<Record<string, unknown>[]>("SELECT name AS Nombre, price AS Precio, stock AS \"Stock Directo\", CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM additions WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
-    db.select<Record<string, unknown>[]>("SELECT name AS Nombre, unit AS Unidad, stock AS Stock_Actual, low_stock_threshold AS Umbral_Alerta FROM supplies WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
-    db.select<Record<string, unknown>[]>(
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, price AS Precio, stock AS \"Stock Directo\", CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM additions WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, unit AS Unidad, stock AS Stock_Actual, low_stock_threshold AS Umbral_Alerta FROM supplies WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>(
       `SELECT p.name AS Producto, s.name AS Insumo, ps.quantity_per_sale AS Cantidad_Por_Venta
        FROM product_supplies ps JOIN products p ON p.id=ps.product_id JOIN supplies s ON s.id=ps.supply_id
        WHERE p.tenant_id=$1 ORDER BY p.name COLLATE NOCASE`, [tid]),
-    db.select<Record<string, unknown>[]>("SELECT name AS Nombre, price AS Precio, CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM combos WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
-    db.select<Record<string, unknown>[]>(
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, price AS Precio, CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM combos WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>(
       `SELECT c.name AS Combo, p.name AS Producto, ci.quantity AS Cantidad
        FROM combo_items ci JOIN combos c ON c.id=ci.combo_id JOIN products p ON p.id=ci.product_id
        WHERE c.tenant_id=$1 ORDER BY c.name COLLATE NOCASE`, [tid]),
-    db.select<Record<string, unknown>[]>(
+    db.select<Record<string, string | number | null>[]>(
       `SELECT p.name AS Producto, po.name AS Opcion, po.sort_order AS Orden
        FROM product_options po JOIN products p ON p.id=po.product_id
        WHERE p.tenant_id=$1 AND po.active=1 ORDER BY p.name COLLATE NOCASE, po.sort_order`, [tid]),
-    db.select<Record<string, unknown>[]>("SELECT name AS Nombre, CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM sauces WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM sauces WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
   ]);
 
   return excelService.exportWorkbook(`productos_adiciones_${todayStr()}`, [
@@ -72,7 +72,7 @@ export async function exportHistorial(): Promise<boolean> {
   const db = await databaseManager.database();
   const tid = tenantId();
 
-  const pedidos = await db.select<Record<string, unknown>[]>(
+  const pedidos = await db.select<Record<string, string | number | null>[]>(
     `SELECT s.invoice_number AS Factura,
             strftime('%d/%m/%Y %H:%M', s.created_at, 'localtime') AS Fecha,
             COALESCE(u.display_name, u.username, 'Desconocido') AS Vendedor,
@@ -96,7 +96,7 @@ export async function exportHistorial(): Promise<boolean> {
      WHERE s.tenant_id=$1
      ORDER BY s.created_at DESC`, [tid]);
 
-  const detalle = await db.select<Record<string, unknown>[]>(
+  const detalle = await db.select<Record<string, string | number | null>[]>(
     `SELECT s.invoice_number AS Factura,
             si.product_name AS Producto,
             COALESCE(si.selected_option, '') AS Opcion,
@@ -125,7 +125,7 @@ export async function exportCajas(): Promise<boolean> {
   const db = await databaseManager.database();
   const tid = tenantId();
 
-  const cajas = await db.select<Record<string, unknown>[]>(
+  const cajas = await db.select<Record<string, string | number | null>[]>(
     `SELECT cs.session_number AS Caja,
             CASE WHEN cs.status='OPEN' THEN 'Abierta' ELSE 'Cerrada' END AS Estado,
             strftime('%d/%m/%Y %H:%M', cs.opened_at, 'localtime') AS Fecha_Apertura,
@@ -156,7 +156,7 @@ export async function exportUsuarios(): Promise<boolean> {
   const db = await databaseManager.database();
   const tid = tenantId();
 
-  const usuarios = await db.select<Record<string, unknown>[]>(
+  const usuarios = await db.select<Record<string, string | number | null>[]>(
     `SELECT id AS ID, username AS Usuario,
             COALESCE(display_name, '') AS Nombre_Display,
             CASE WHEN role='ADMIN' THEN 'Administrador' WHEN role='SUPERADMIN' THEN 'Superadministrador' ELSE 'Vendedor' END AS Rol,

@@ -467,7 +467,7 @@ type SaleMetaUpdate = {
 function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { detail: SaleDetail | null; loading: boolean; onClose: () => void; onDeleted: (id: string) => void; onUpdated: (updated: Partial<SaleDetail["sale"]>) => void }) {
   const session = sessionContext.current();
   const isSuperAdmin = session?.user.role === "SUPERADMIN";
-  const sale = detail?.sale;
+  const sale = detail?.sale ?? null;
 
   const [activeTab, setActiveTab] = useState<"info" | "stock">("info");
   useEffect(() => { setActiveTab("info"); }, [detail?.sale.id]);
@@ -687,7 +687,7 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
         <Button size="xs" variant="outline" colorPalette="gray" onClick={onClose}><X size={14} />Cerrar</Button>
       </Flex>
 
-      {loading || !detail ? (
+      {loading || !detail || !sale ? (
         <Flex flex="1" align="center" justify="center">
           <Text color="gray.400" fontSize="sm">{loading ? "Cargando..." : "Sin datos"}</Text>
         </Flex>

@@ -5,7 +5,7 @@ import { sessionContext } from "../../core/session/SessionContext";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { quickLinksRepository } from "../../infrastructure/sqlite/repositories";
-import { MENU_ITEMS } from "../main/menuConfig";
+import { MENU_ITEMS, type MenuItemDef } from "../main/menuConfig";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -43,10 +43,10 @@ async function loadHomeData(tenantId: string, cashSessionId: string | null, isAd
 
   let todaySales = 0;
   let todayTotal = 0;
-  if (isAdmin && cash) {
+  if (cash) {
     const salesRow = await database.select<{ count: number; total: number }[]>(
-      "SELECT COUNT(*) AS count, COALESCE(SUM(total),0) AS total FROM sales WHERE cash_session_id=$1 AND created_at >= $2",
-      [cash.id, todayIso],
+      "SELECT COUNT(*) AS count, COALESCE(SUM(total),0) AS total FROM sales WHERE cash_session_id=$1",
+      [cash.id],
     );
     todaySales = Number(salesRow[0]?.count ?? 0);
     todayTotal = Number(salesRow[0]?.total ?? 0);
@@ -125,11 +125,11 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               action="Ir a Caja"
               onAction={() => onNavigate("cash")}
             />
-            {isAdmin && data?.cash ? (
+            {data?.cash ? (
               <StatCard
                 icon={<TrendingUp size={16} />}
                 color="purple"
-                title="Ventas hoy"
+                title="Ventas"
                 value={`${data.todaySales} ventas`}
                 subtitle={money(data.todayTotal)}
                 action="Ver Historial"
@@ -206,7 +206,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
 // EditLinksModal
 // ---------------------------------------------------------------------------
 function EditLinksModal({ options, selected, onClose, onSave }: {
-  options: QuickLinkOption[];
+  options: MenuItemDef[];
   selected: string[];
   onClose: () => void;
   onSave: (ids: string[]) => void;

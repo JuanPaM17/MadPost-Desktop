@@ -51,7 +51,7 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
         <MenuSection title="OPERACIONES" items={operations} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} />
         <Separator borderColor="whiteAlpha.300" my="4" />
         <MenuSection title="CATALOGO" items={catalog} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} />
-        {admin ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="ADMINISTRACION" items={administration} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
+        {(() => { const adminItems = admin ? administration : administration.filter((m) => !MENU_ITEMS.find((mi) => mi.id === m.id)?.adminOnly); return adminItems.length > 0 ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="ADMINISTRACION" items={adminItems} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null; })()}
         {developer ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="DEVELOPER" items={MENU_ITEMS.filter((m) => m.id === "sql-editor")} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
         <Separator borderColor="whiteAlpha.300" my="4" />
         <MenuButton item={{ id: "settings", label: "Configuracion", icon: Settings }} active={activeView === "settings"} onClick={() => setActiveView("settings")} collapsed={sidebarCollapsed} />
@@ -88,4 +88,4 @@ function LicenseBanner({ expiresAt }: { expiresAt: string | null }) {
 }
 
 function roleLabel(role: LocalUser["role"]) { return role === "SUPERADMIN" ? "Super Admin" : role === "ADMIN" ? "Administrador" : "Vendedor"; }
-function allItems(admin: boolean, developer: boolean) { return [...operations, ...catalog, ...(admin ? administration : []), ...(developer ? MENU_ITEMS.filter((m) => m.id === "sql-editor") : []), { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }]; }
+function allItems(admin: boolean, developer: boolean) { return [...operations, ...catalog, ...(admin ? administration : administration.filter((m) => !MENU_ITEMS.find((mi) => mi.id === m.id)?.adminOnly)), ...(developer ? MENU_ITEMS.filter((m) => m.id === "sql-editor") : []), { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }]; }

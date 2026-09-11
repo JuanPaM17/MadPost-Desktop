@@ -89,7 +89,7 @@ class AuthService {
     return database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE tenant_id=$1 AND role != 'SUPERADMIN' ORDER BY username COLLATE NOCASE", [tenantId]);
   }
 
-  async updateUser(user: LocalUser, username: string, displayName: string, role: Extract<UserRole, "ADMIN" | "SELLER">) {
+  async updateUser(user: LocalUser, username: string, displayName: string, role: UserRole) {
     const normalizedUsername = username.trim().toLowerCase();
     if (!normalizedUsername) throw new Error("El usuario es obligatorio.");
     const existing = await userRepository.findByUsername(user.tenant_id, normalizedUsername);

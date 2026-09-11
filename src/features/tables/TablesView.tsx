@@ -484,7 +484,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           <Flex gap="3" align="center" ml="4">
             {(Object.entries(STATUS_COLORS) as [TableStatus, string][]).map(([status, color]) => (
               <Flex key={status} align="center" gap="1">
-                <Box w="12px" h="12px" borderRadius="3px" bg={color} border="1px solid rgba(0,0,0,0.15)" shrink="0" />
+                <Box w="12px" h="12px" borderRadius="3px" bg={color} border="1px solid rgba(0,0,0,0.15)" flexShrink="0" />
                 <Text fontSize="xs" color="gray.600">{STATUS_LABELS[status]}</Text>
               </Flex>
             ))}
@@ -907,7 +907,7 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComanda
 
   if (!order) {
     async function handleOpen() {
-      if (!cash || !session) return;
+      if (!cash || cash === "loading" || !session) return;
       setSaving(true);
       try {
         const created = await tableOrderService.openOrder(session.tenantId, table.id, cash.id, session.user.id, clientName || null);
@@ -1315,7 +1315,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
       </Box>
 
       {/* Total + barra de acciones */}
-      <Box shrink="0">
+      <Box flexShrink="0">
         <Flex px="1" py="2" justify="space-between" align="center" borderTopWidth="1px" borderColor="gray.100">
           <Text fontWeight="semibold" fontSize="sm" color="gray.700">Total mesa</Text>
           <Text fontWeight="bold" fontSize="md">{fmtMoney(orderTotal)}</Text>
@@ -2084,7 +2084,7 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
           </Button>
         </Box>
 
-        <Box px="5" py="4" borderTopWidth="1px" borderColor="gray.100" shrink="0">
+        <Box px="5" py="4" borderTopWidth="1px" borderColor="gray.100" flexShrink="0">
           {validationMsg && (
             <Flex align="center" gap="2" mb="3">
               <AlertCircle size={14} color="#d97706" />

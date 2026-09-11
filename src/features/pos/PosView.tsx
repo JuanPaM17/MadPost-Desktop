@@ -78,7 +78,7 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
         const found = current.find((entry) => entry.key === key);
         if (found) return current.map((entry) => entry.key === key ? { ...entry, quantity: entry.quantity + 1 } : entry);
       }
-      return [...current, { key, name: item.name, price: item.price, quantity: 1, kind: item.kind, note: "", showAdditions: item.kind === "product" && item.showAdditions, showSauces: item.kind === "product" && item.showSauces, additions: {}, sauces: [], options: item.kind === "product" ? item.options : [], selectedOption: item.kind === "product" && item.options.length > 0 ? item.options[0] : null, children: item.kind === "combo" ? item.items.map((child) => ({ ...child, additions: {}, sauces: [], selectedOption: child.options.length > 0 ? child.options[0] : null })) : [] }];
+      return [...current, { key, name: item.name, price: item.price, quantity: 1, kind: item.kind, note: "", showAdditions: item.kind === "product" && item.showAdditions, showSauces: item.kind === "product" && item.showSauces, additions: {}, sauces: [], options: item.kind === "product" ? item.options : [], selectedOption: item.kind === "product" && item.options.length > 0 ? item.options[0] : null, categoryName: item.kind === "product" ? item.categoryName : null, children: item.kind === "combo" ? item.items.map((child) => ({ ...child, additions: {}, sauces: [], selectedOption: child.options.length > 0 ? child.options[0] : null })) : [] }];
     });
   }
   function changeOption(key: string, option: string) { setCart((current) => current.map((item) => item.key !== key ? item : { ...item, selectedOption: option })); }

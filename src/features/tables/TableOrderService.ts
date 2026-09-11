@@ -62,7 +62,7 @@ export const tableOrderService = {
       [clientId, orderId, name, now],
     );
 
-    return { id: orderId, tenant_id: tenantId, table_id: tableId, user_id: userId, cash_session_id: cashSessionId, client_name: name, status: "OPEN", opened_at: now, closed_at: null, notes: null };
+    return { id: orderId, tenant_id: tenantId, table_id: tableId, user_id: userId, cash_session_id: cashSessionId, client_name: name, status: "OPEN", opened_at: now, closed_at: null, notes: null, comanda_sent: null };
   },
 
   async getOpenOrdersByTableIds(tableIds: string[]): Promise<TableOrder[]> {

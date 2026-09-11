@@ -261,11 +261,11 @@ function SyncRow({ row, logOpen, onToggleLog }: { row: RowState; logOpen: boolea
   return (
     <Box py="2">
       <Flex align="center" gap="2">
-        <Text w="210px" shrink="0" fontSize="sm" fontWeight={isReset ? "bold" : "normal"} color={isReset ? "#ef4444" : "gray.700"} truncate>
+        <Text w="210px" flexShrink="0" fontSize="sm" fontWeight={isReset ? "bold" : "normal"} color={isReset ? "#ef4444" : "gray.700"} truncate>
           {label}
         </Text>
-        <Text w="110px" shrink="0" fontSize="sm" color="gray.400">{countLabel}</Text>
-        <Text w="120px" shrink="0" fontSize="sm" fontWeight={row.status === "DONE" || row.status === "ERROR" ? "bold" : "normal"} color={statusColor}>
+        <Text w="110px" flexShrink="0" fontSize="sm" color="gray.400">{countLabel}</Text>
+        <Text w="120px" flexShrink="0" fontSize="sm" fontWeight={row.status === "DONE" || row.status === "ERROR" ? "bold" : "normal"} color={statusColor}>
           {statusLabel}
         </Text>
         <Box flex="1" />
