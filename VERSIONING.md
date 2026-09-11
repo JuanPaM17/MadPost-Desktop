@@ -138,7 +138,12 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ### v1.0.0 — Lanzamiento inicial
 
-MadPost llega a Windows como aplicacion nativa construida con React + Tauri, reemplazando la version anterior basada en Java + JavaFX. Misma funcionalidad central, arquitectura completamente nueva.
+Primera version oficial de MadPost Desktop para Windows. Todo lo que necesitas para gestionar tu negocio desde un solo lugar.
+
+**Pantalla de inicio**
+- Resumen en tiempo real del estado de la caja, ventas de la sesion activa, productos disponibles y alertas de stock
+- Accesos rapidos fijos a las secciones principales y accesos personalizables por cada usuario
+- Vista diferenciada segun rol: vendedor ve lo esencial, administrador ve estadisticas y alertas adicionales
 
 **Punto de venta**
 - Venta directa con buscador de productos por categoria y subcategoria
@@ -207,7 +212,3 @@ MadPost llega a Windows como aplicacion nativa construida con React + Tauri, ree
 **Actualizaciones**
 - Auto-actualizacion desde GitHub Releases con notificacion al iniciar si hay version nueva
 - Actualizaciones obligatorias configurables por version minima
-
-**Pantalla de inicio**
-- Accesos directos configurables por usuario a las secciones mas usadas
-- Estadisticas rapidas: estado de caja, ventas de la sesion activa, productos activos y alertas de stock bajo
