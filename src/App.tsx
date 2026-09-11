@@ -113,7 +113,7 @@ function MigratingView({ progress, countdown }: { progress: MigrationProgress | 
   const percent = progress?.phase === "copying" ? progress.percent : progress?.phase === "done" ? 100 : 0;
   return (
     <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50">
-      <Box w="64px" h="64px" borderRadius="md" bg="#6366f1" color="white" display="grid" placeItems="center" fontSize="28px" fontWeight="bold">M</Box>
+      <Box w="72px" h="72px" borderRadius="md" overflow="hidden"><img src="/logo.png" alt="MadPost" style={{ width: "100%", height: "100%", objectFit: "contain" }} /></Box>
       <Heading mt="6" size="lg">MadPost</Heading>
       <Text mt="2" color="gray.500">{label}</Text>
       <Box mt="5" w="280px" h="6px" bg="gray.200" borderRadius="full" overflow="hidden">
@@ -124,7 +124,7 @@ function MigratingView({ progress, countdown }: { progress: MigrationProgress | 
 }
 
 function LoadingView() {
-  return <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50"><Box className="app-loading-mark" w="64px" h="64px" borderRadius="md" bg="#6366f1" color="white" display="grid" placeItems="center" fontSize="28px" fontWeight="bold">M</Box><Spinner mt="7" size="lg" color="#6366f1" borderWidth="3px" /><Heading mt="6" size="lg">MadPost</Heading><Text mt="2" color="gray.500">Preparando tu espacio de trabajo</Text></Flex>;
+  return <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50"><Box className="app-loading-mark" w="72px" h="72px" borderRadius="md" overflow="hidden"><img src="/logo.png" alt="MadPost" style={{ width: "100%", height: "100%", objectFit: "contain" }} /></Box><Spinner mt="7" size="lg" color="#6366f1" borderWidth="3px" /><Heading mt="6" size="lg">MadPost</Heading><Text mt="2" color="gray.500">Preparando tu espacio de trabajo</Text></Flex>;
 }
 
 function RecoveryCodeDialog({ code, onClose }: { code: string; onClose: () => void }) {

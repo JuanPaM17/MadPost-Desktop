@@ -4,6 +4,19 @@ Sistema de punto de venta para Windows, construido con React, TypeScript y Tauri
 
 ## Caracteristicas principales
 
+### Pantalla de inicio
+
+- Saludo personalizado con el nombre del usuario autenticado
+- Tarjetas de resumen cargadas de forma asincrona con spinner mientras cargan:
+  - **Caja**: estado (abierta / cerrada), numero de sesion y quien la abrio; cambia de color segun estado
+  - **Ventas**: numero de ventas y total acumulado de la sesion activa; se oculta si no hay caja abierta
+  - **Productos**: cantidad de productos activos disponibles para venta
+  - **Mesas**: total de mesas activas y cuantas tienen una orden abierta
+  - **Stock bajo**: insumos en o por debajo del umbral de alerta; verde si todo esta en orden
+- **Accesos rapidos fijos** con icono y color por seccion: Punto de Venta, Caja, Productos, Mesas e Inventario
+- **Accesos rapidos personalizables**: cada usuario puede agregar secciones extra mediante un modal; la seleccion se persiste por usuario en SQLite
+- Las opciones del modal se filtran segun el rol del usuario (admin / super admin / dev)
+
 - Punto de venta con combos, adiciones, salsas y domicilios
 - Mesas con cuentas separadas por cliente y comandas diferenciales a cocina
 - Caja con apertura/cierre de turno, historial de ventas y reportes PDF
