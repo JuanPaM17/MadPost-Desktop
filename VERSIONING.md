@@ -207,3 +207,7 @@ MadPost llega a Windows como aplicacion nativa construida con React + Tauri, ree
 **Actualizaciones**
 - Auto-actualizacion desde GitHub Releases con notificacion al iniciar si hay version nueva
 - Actualizaciones obligatorias configurables por version minima
+
+**Pantalla de inicio**
+- Accesos directos configurables por usuario a las secciones mas usadas
+- Estadisticas rapidas: estado de caja, ventas de la sesion activa, productos activos y alertas de stock bajo

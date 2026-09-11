@@ -246,14 +246,14 @@ class SaleService {
         const parentId = crypto.randomUUID();
         await database.execute(
           `INSERT INTO sale_items(id,sale_id,product_id,product_name,quantity,unit_price,subtotal,notes,selected_option,combo_id,combo_sale_item_id,original_unit_price,category_name)
-           VALUES($1,$2,NULL,$3,$4,$5,$6,$7,NULL,NULL,NULL,NULL,NULL)`,
-          [parentId, saleId, item.name, item.quantity, item.price, item.price * item.quantity, item.note || null],
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL,$3,NULL,NULL,NULL)`,
+          [parentId, saleId, item.productId, item.name, item.quantity, item.price, item.price * item.quantity, item.note || null],
         );
         // Enqueue sale_item BEFORE children (FK order)
         await syncQueueRepository.enqueue("sale_items", parentId, "INSERT", {
-          id: parentId, sale_id: saleId, product_id: null, product_name: item.name,
+          id: parentId, sale_id: saleId, product_id: item.productId, product_name: item.name,
           quantity: item.quantity, unit_price: item.price, subtotal: item.price * item.quantity,
-          notes: item.note || null, selected_option: null, combo_id: null, combo_sale_item_id: null,
+          notes: item.note || null, selected_option: null, combo_id: item.productId, combo_sale_item_id: null,
           original_unit_price: null, category_name: null,
         });
 

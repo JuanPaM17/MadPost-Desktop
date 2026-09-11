@@ -1183,7 +1183,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
         const parentId = await tableOrderService.addItem({
           orderId: order.id,
           clientId: addProductsClientId,
-          productId: null,
+          productId: comboId,
           productName: cartItem.name,
           quantity: cartItem.quantity,
           unitPrice: cartItem.price,
@@ -1214,6 +1214,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             sauces: sauceList,
           });
         }
+        await tableOrderService.recalcComboParentSubtotal(parentId);
       } else {
         const additionList = additions
           .filter((a) => (cartItem.additions[a.id] ?? 0) > 0)
@@ -2637,6 +2638,110 @@ function OrderItemList({ items, allItems, onItemsChange }: { items: TableOrderIt
   );
 }
 
+function ComboChildRow({ child, onItemsChange }: { child: TableOrderItem; onItemsChange?: () => void }) {
+  const [localAdditions, setLocalAdditions] = useState<{ name: string; quantity: number; price: number }[]>(child.additions);
+  const [localSauces, setLocalSauces] = useState<{ name: string }[]>(child.sauces);
+  const [localOption, setLocalOption] = useState<string | null>(child.selected_option);
+  const [allAdditions, setAllAdditions] = useState<PosAddition[]>([]);
+  const [allSauces, setAllSauces] = useState<PosSauce[]>([]);
+  const [maxSauces, setMaxSauces] = useState(3);
+  const [editMode, setEditMode] = useState<"additions" | "sauces" | "option" | null>(null);
+  const [draftAdditions, setDraftAdditions] = useState<Record<string, number>>({});
+  const [draftSauces, setDraftSauces] = useState<string[]>([]);
+  const [showAdditions, setShowAdditions] = useState(false);
+  const [showSauces, setShowSauces] = useState(false);
+  const [productOptions, setProductOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!child.product_id) return;
+    posService.products(null).then((prods) => {
+      const prod = prods.find((p) => p.id === child.product_id);
+      if (!prod) return;
+      setShowAdditions(prod.showAdditions);
+      setShowSauces(prod.showSauces);
+      setProductOptions(prod.options);
+    });
+  }, [child.product_id]);
+
+  async function openModal(mode: "additions" | "sauces" | "option") {
+    if (mode !== "option") {
+      const [adds, { items: scs, max }] = await Promise.all([posService.additions(), posService.sauces()]);
+      setAllAdditions(adds);
+      setAllSauces(scs);
+      setMaxSauces(max);
+      if (mode === "additions") {
+        const qty: Record<string, number> = {};
+        for (const a of localAdditions) {
+          const found = adds.find((x) => x.name === a.name);
+          if (found) qty[found.id] = a.quantity;
+        }
+        setDraftAdditions(qty);
+      } else {
+        setDraftSauces(scs.filter((s) => localSauces.some((ls) => ls.name === s.name)).map((s) => s.id));
+      }
+    }
+    setEditMode(mode);
+  }
+
+  async function confirmAdditions() {
+    const adds = allAdditions.filter((a) => (draftAdditions[a.id] ?? 0) > 0).map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: draftAdditions[a.id] }));
+    await tableOrderService.replaceItemAdditions(child.id, adds);
+    setLocalAdditions(adds.map((a) => ({ name: a.name, quantity: a.quantity, price: a.price })));
+    setEditMode(null);
+    onItemsChange?.();
+  }
+
+  async function confirmSauces() {
+    const scs = allSauces.filter((s) => draftSauces.includes(s.id)).map((s) => ({ id: s.id, name: s.name }));
+    await tableOrderService.replaceItemSauces(child.id, scs);
+    setLocalSauces(scs.map((s) => ({ name: s.name })));
+    setEditMode(null);
+    onItemsChange?.();
+  }
+
+  async function confirmOption(option: string) {
+    await tableOrderService.updateItemOption(child.id, option);
+    setLocalOption(option);
+    setEditMode(null);
+    onItemsChange?.();
+  }
+
+  return (
+    <Box pl="3" mt="1" borderLeftWidth="2px" borderColor="gray.200">
+      <Flex align="center" gap="1">
+        <Text fontSize="xs" color="gray.600" fontWeight="medium" flex="1">- {child.quantity > 1 ? `${child.quantity}x ` : ""}{child.product_name}</Text>
+        {productOptions.length > 0 && (
+          <Tip text="Opciones">
+            <Button size="xs" variant="ghost" colorPalette="orange" px="1" onClick={() => void openModal("option")}><Settings2 size={12} /></Button>
+          </Tip>
+        )}
+        {showAdditions && (
+          <Tip text="Adiciones">
+            <Button size="xs" variant="ghost" colorPalette="purple" px="1" onClick={() => void openModal("additions")}><Plus size={12} /></Button>
+          </Tip>
+        )}
+        {showSauces && (
+          <Tip text="Salsas">
+            <Button size="xs" variant="ghost" colorPalette="green" px="1" onClick={() => void openModal("sauces")}><Flame size={12} /></Button>
+          </Tip>
+        )}
+      </Flex>
+      {localOption && <Text fontSize="xs" color="purple.600" fontStyle="italic" pl="2">&gt;&gt; {localOption}</Text>}
+      {localAdditions.map((a, i) => <Text key={i} fontSize="xs" color="gray.500" pl="2">+ {a.quantity > 1 ? `${a.quantity}x ` : ""}{a.name}</Text>)}
+      {localSauces.length > 0 && <Text fontSize="xs" color="orange.600" pl="2">Salsas: {localSauces.map((s) => s.name).join(", ")}</Text>}
+      {editMode === "additions" && (
+        <AdditionsModal name={child.product_name} additions={allAdditions} quantities={draftAdditions} onClose={() => setEditMode(null)} onChange={(id, delta) => setDraftAdditions((prev) => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) + delta) }))} onConfirm={() => void confirmAdditions()} confirmLabel="Guardar" />
+      )}
+      {editMode === "sauces" && (
+        <SaucesModal name={child.product_name} sauces={allSauces} maxSauces={maxSauces} selected={draftSauces} onClose={() => setEditMode(null)} onToggle={(id) => setDraftSauces((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : prev.length < maxSauces ? [...prev, id] : prev)} onConfirm={() => void confirmSauces()} />
+      )}
+      {editMode === "option" && (
+        <OptionModal name={child.product_name} options={productOptions} selected={localOption} onClose={() => setEditMode(null)} onConfirm={(opt) => void confirmOption(opt)} />
+      )}
+    </Box>
+  );
+}
+
 function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void }) {
   const item = group[0];
   const totalQty = group.reduce((s, i) => s + i.quantity, 0);
@@ -2791,12 +2896,7 @@ function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderIte
 
       {/* Hijos de combo */}
       {children.map((child) => (
-        <Box key={child.id} pl="3" mt="1" borderLeftWidth="2px" borderColor="gray.200">
-          <Text fontSize="xs" color="gray.600" fontWeight="medium">- {child.quantity > 1 ? `${child.quantity}x ` : ""}{child.product_name}</Text>
-          {child.selected_option && <Text fontSize="xs" color="purple.600" fontStyle="italic" pl="2">&gt;&gt; {child.selected_option}</Text>}
-          {child.additions.map((a, i) => <Text key={i} fontSize="xs" color="gray.500" pl="2">+ {a.quantity > 1 ? `${a.quantity}x ` : ""}{a.name}</Text>)}
-          {child.sauces.length > 0 && <Text fontSize="xs" color="orange.600" pl="2">Salsas: {child.sauces.map((s) => s.name).join(", ")}</Text>}
-        </Box>
+        <ComboChildRow key={child.id} child={child} onItemsChange={onItemsChange} />
       ))}
 
       {/* Modales de edicion */}

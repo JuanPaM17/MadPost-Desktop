@@ -245,6 +245,37 @@ export const tableOrderService = {
       const newSubtotal = (rows[0].unit_price + additionsTotal) * rows[0].quantity;
       await db.execute("UPDATE table_order_items SET subtotal=$1, updated_at=$2 WHERE id=$3", [newSubtotal, instantNow(), itemId]);
     }
+    // Si es hijo de combo, recalcular subtotal del padre
+    const parentRows = await db.select<{ id: string; unit_price: number; quantity: number }[]>(
+      "SELECT id, unit_price, quantity FROM table_order_items WHERE id=(SELECT combo_table_order_item_id FROM table_order_items WHERE id=$1)",
+      [itemId],
+    );
+    if (parentRows.length) {
+      const parent = parentRows[0];
+      const childAdditions = await db.select<{ price: number; quantity: number }[]>(
+        "SELECT toia.price, toia.quantity FROM table_order_item_additions toia JOIN table_order_items toi ON toi.id=toia.table_order_item_id WHERE toi.combo_table_order_item_id=$1",
+        [parent.id],
+      );
+      const childAdditionsTotal = childAdditions.reduce((s, a) => s + a.price * a.quantity, 0);
+      const newParentSubtotal = (parent.unit_price + childAdditionsTotal) * parent.quantity;
+      await db.execute("UPDATE table_order_items SET subtotal=$1, updated_at=$2 WHERE id=$3", [newParentSubtotal, instantNow(), parent.id]);
+    }
+  },
+
+  async recalcComboParentSubtotal(parentId: string): Promise<void> {
+    const db = await databaseManager.database();
+    const parentRows = await db.select<{ unit_price: number; quantity: number }[]>(
+      "SELECT unit_price, quantity FROM table_order_items WHERE id=$1", [parentId],
+    );
+    if (!parentRows.length) return;
+    const parent = parentRows[0];
+    const childAdditions = await db.select<{ price: number; quantity: number }[]>(
+      "SELECT toia.price, toia.quantity FROM table_order_item_additions toia JOIN table_order_items toi ON toi.id=toia.table_order_item_id WHERE toi.combo_table_order_item_id=$1",
+      [parentId],
+    );
+    const childAdditionsTotal = childAdditions.reduce((s, a) => s + a.price * a.quantity, 0);
+    const newSubtotal = (parent.unit_price + childAdditionsTotal) * parent.quantity;
+    await db.execute("UPDATE table_order_items SET subtotal=$1, updated_at=$2 WHERE id=$3", [newSubtotal, instantNow(), parentId]);
   },
 
   async replaceItemSauces(itemId: string, sauces: { id: string; name: string }[]): Promise<void> {

@@ -26,6 +26,7 @@ type SaleRow = {
   notes: string | null;
   cash_session_id: string;
   session_number: number | null;
+  client_name: string | null;
 };
 
 type CashOption = { id: string; label: string };
@@ -66,9 +67,10 @@ type Filters = {
   collectedBy: string;
   attendedBy: string;
   paymentMethod: string;
+  clientName: string;
 };
 
-const EMPTY_FILTERS: Filters = { sessionId: "", dateFrom: "", dateTo: "", collectedBy: "", attendedBy: "", paymentMethod: "" };
+const EMPTY_FILTERS: Filters = { sessionId: "", dateFrom: "", dateTo: "", collectedBy: "", attendedBy: "", paymentMethod: "", clientName: "" };
 
 // ---------------------------------------------------------------------------
 // Data
@@ -90,13 +92,14 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
   if (filters.paymentMethod) conditions.push("s.payment_method=$" + (params.push(filters.paymentMethod)));
   if (filters.collectedBy) conditions.push("s.collected_by_user_id=$" + (params.push(filters.collectedBy)));
   if (filters.attendedBy) conditions.push("s.user_id=$" + (params.push(filters.attendedBy)));
+  if (filters.clientName) conditions.push("s.client_name LIKE $" + (params.push("%" + filters.clientName + "%")));
 
   const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
   const limit = filters.sessionId ? "" : "LIMIT 500";
 
   return database.select<SaleRow[]>(
     `SELECT s.id, s.invoice_number, s.created_at, s.payment_method, s.is_delivery, s.total, s.notes,
-            s.cash_session_id, s.collected_by_display_name AS collected_by,
+            s.cash_session_id, s.collected_by_display_name AS collected_by, s.client_name,
             COALESCE(u.display_name, u.username) AS attended_by,
             cs.session_number
      FROM sales s
@@ -238,6 +241,7 @@ export function HistoryView({ initialInvoice }: { initialInvoice?: string } = {}
       s.invoice_number.toLowerCase().includes(q) ||
       (s.attended_by ?? "").toLowerCase().includes(q) ||
       (s.notes ?? "").toLowerCase().includes(q) ||
+      (s.client_name ?? "").toLowerCase().includes(q) ||
       String(s.total).includes(q),
     );
   }, [sales, search]);
@@ -1288,6 +1292,12 @@ function FiltersModal({ filters, cashOptions, userOptions, isAdmin, onChange, on
           <FieldLabel label="Hasta">
             <Input type="date" value={filters.dateTo} onChange={(e) => set("dateTo")(e.target.value)} />
           </FieldLabel>
+
+          <Box gridColumn="1 / -1">
+            <FieldLabel label="Cliente">
+              <Input placeholder="Buscar por nombre..." value={filters.clientName} onChange={(e) => set("clientName")(e.target.value)} />
+            </FieldLabel>
+          </Box>
 
           {isAdmin ? (
             <>

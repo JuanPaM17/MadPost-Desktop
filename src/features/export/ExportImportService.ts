@@ -28,7 +28,7 @@ export async function exportProductos(): Promise<boolean> {
   const tid = tenantId();
 
   const [categorias, productos, adiciones, insumos, insumosProd, combos, comboItems, opciones, salsas] = await Promise.all([
-    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, sort_order AS Orden FROM categories WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, CASE WHEN show_additions=1 THEN 'Si' ELSE 'No' END AS Muestra_Adiciones, CASE WHEN show_sauces=1 THEN 'Si' ELSE 'No' END AS Muestra_Salsas FROM categories WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
     db.select<Record<string, string | number | null>[]>(
       `SELECT p.name AS Nombre, COALESCE(c.name,'') AS Categoria, p.price AS Precio,
               p.stock AS "Stock Directo", CASE WHEN p.active=1 THEN 'Si' ELSE 'No' END AS Activo, COALESCE(p.description,'') AS Descripcion
@@ -133,8 +133,8 @@ export async function exportCajas(): Promise<boolean> {
             COALESCE(u.display_name, u.username, 'Desconocido') AS Vendedor,
             COALESCE(cs.opening_amount, 0) AS Monto_Inicial,
             COALESCE(cs.expected_amount, 0) AS Monto_Esperado,
-            COALESCE(cs.actual_amount, 0) AS Monto_Real,
-            COALESCE(cs.actual_amount, 0) - COALESCE(cs.expected_amount, 0) AS Diferencia,
+            COALESCE(cs.closing_amount, 0) AS Monto_Real,
+            COALESCE(cs.closing_amount, 0) - COALESCE(cs.expected_amount, 0) AS Diferencia,
             COALESCE(SUM(s.total), 0) AS Total_Ventas,
             COUNT(s.id) AS Num_Pedidos
      FROM cash_sessions cs
@@ -198,20 +198,22 @@ export async function importProductos(): Promise<ImportResult | null> {
   }
 
   // 1. Categorias
-  const catRows = sheetRows<{ Nombre?: string; Orden?: number }>("Categorias");
+  const catRows = sheetRows<{ Nombre?: string; Muestra_Adiciones?: string; Muestra_Salsas?: string }>("Categorias");
   const catIdByName = new Map<string, string>();
   for (const row of catRows) {
     const name = row.Nombre?.toString().trim();
     if (!name) continue;
     try {
+      const showAdditions = row.Muestra_Adiciones?.toString().toLowerCase() === "si" ? 1 : 0;
+      const showSauces = row.Muestra_Salsas?.toString().toLowerCase() === "si" ? 1 : 0;
       const existing = await db.select<{ id: string }[]>("SELECT id FROM categories WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
       if (existing[0]) {
-        await db.execute("UPDATE categories SET sort_order=$1, updated_at=$2 WHERE id=$3", [row.Orden ?? 0, now, existing[0].id]);
+        await db.execute("UPDATE categories SET show_additions=$1, show_sauces=$2, updated_at=$3 WHERE id=$4", [showAdditions, showSauces, now, existing[0].id]);
         catIdByName.set(name.toLowerCase(), existing[0].id);
         updated++;
       } else {
         const id = crypto.randomUUID();
-        await db.execute("INSERT INTO categories(id,tenant_id,name,sort_order,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$5)", [id, tid, name, row.Orden ?? 0, now]);
+        await db.execute("INSERT INTO categories(id,tenant_id,name,sort_order,show_additions,show_sauces,created_at,updated_at) VALUES($1,$2,$3,0,$4,$5,$6,$6)", [id, tid, name, showAdditions, showSauces, now]);
         catIdByName.set(name.toLowerCase(), id);
         created++;
       }

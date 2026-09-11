@@ -171,6 +171,48 @@ export function ProductGrid({
 }
 
 // ---------------------------------------------------------------------------
+// AdditionsGrid — grid reutilizable de adiciones (3 columnas)
+// ---------------------------------------------------------------------------
+export function AdditionsGrid({ additions, quantities, onChange }: {
+  additions: PosAddition[];
+  quantities: Record<string, number>;
+  onChange: (id: string, delta: number) => void;
+}) {
+  return (
+    <Grid templateColumns="repeat(3, 1fr)" gap="3">
+      {additions.map((addition) => {
+        const quantity = quantities[addition.id] ?? 0;
+        const disabled = addition.stock !== null && addition.stock <= 0;
+        return (
+          <Flex
+            key={addition.id}
+            direction="column"
+            align="center"
+            justify="space-between"
+            borderWidth="2px"
+            borderColor={quantity ? "purple.400" : "gray.200"}
+            bg={quantity ? "purple.50" : "white"}
+            borderRadius="md"
+            p="3"
+            gap="2"
+            minH="100px"
+          >
+            <Box textAlign="center">
+              <Text fontSize="sm" fontWeight={quantity ? "semibold" : "normal"} lineClamp={2} lineHeight="1.3">{addition.name}</Text>
+              {addition.price ? <Text fontSize="xs" color="purple.600" mt="0.5">+{money(addition.price)}</Text> : <Text fontSize="xs" color="gray.400" mt="0.5">gratis</Text>}
+            </Box>
+            <Flex align="center" gap="2">
+              <Button size="xs" variant="outline" disabled={!quantity} onClick={() => onChange(addition.id, -1)}><Minus size={12} /></Button>
+              <Text minW="16px" textAlign="center" fontSize="sm" fontWeight="semibold">{quantity}</Text>
+              <Button size="xs" colorPalette="purple" disabled={disabled} onClick={() => onChange(addition.id, 1)}><Plus size={12} /></Button>
+            </Flex>
+          </Flex>
+        );
+      })}
+    </Grid>
+  );
+}
+
 // AdditionsModal
 // ---------------------------------------------------------------------------
 export function AdditionsModal({ name, additions, quantities, onClose, onChange, onConfirm, confirmLabel = "Listo" }: {
@@ -184,31 +226,24 @@ export function AdditionsModal({ name, additions, quantities, onClose, onChange,
 }) {
   return (
     <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
-      <Box w="full" maxW="520px" maxH="calc(100vh - 48px)" overflowY="auto" bg="white" p="6" boxShadow="2xl" borderRadius="md">
-        <Flex justify="space-between" align="center">
-          <Text fontWeight="bold" fontSize="lg">Adiciones</Text>
-          <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
-        </Flex>
-        <Text mt="2" color="gray.500" fontSize="sm">{name}</Text>
-        <Flex mt="5" gap="2" wrap="wrap">
-          {additions.map((addition) => {
-            const quantity = quantities[addition.id] ?? 0;
-            const disabled = addition.stock !== null && addition.stock <= 0;
-            return (
-              <Flex key={addition.id} borderWidth="1px" borderColor={quantity ? "purple.300" : "gray.200"} bg={quantity ? "purple.50" : "white"} p="2" align="center" gap="2" borderRadius="sm">
-                <Text fontSize="sm">{addition.name}{addition.price ? ` +${money(addition.price)}` : ""}</Text>
-                <Button size="xs" variant="outline" disabled={!quantity} onClick={() => onChange(addition.id, -1)}><Minus size={13} /></Button>
-                <Text minW="18px" textAlign="center" fontSize="sm">{quantity}</Text>
-                <Button size="xs" colorPalette="purple" disabled={disabled} onClick={() => onChange(addition.id, 1)}><Plus size={13} /></Button>
-              </Flex>
-            );
-          })}
-        </Flex>
-        <Flex mt="6" justify="end" gap="2">
-          {onConfirm
-            ? <><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button colorPalette="purple" onClick={onConfirm}>{confirmLabel}</Button></>
-            : <Button variant="outline" onClick={onClose}>Listo</Button>}
-        </Flex>
+      <Box w="full" maxW="560px" bg="white" boxShadow="2xl" borderRadius="md" display="flex" flexDirection="column" maxH="calc(100vh - 48px)">
+        <Box p="6" pb="3">
+          <Flex justify="space-between" align="center">
+            <Text fontWeight="bold" fontSize="lg">Adiciones</Text>
+            <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
+          </Flex>
+          <Text mt="1" color="gray.500" fontSize="sm">{name}</Text>
+        </Box>
+        <Box overflowY="auto" px="6" flex="1">
+          <AdditionsGrid additions={additions} quantities={quantities} onChange={onChange} />
+        </Box>
+        <Box p="6" pt="4">
+          <Flex justify="end" gap="2">
+            {onConfirm
+              ? <><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button colorPalette="purple" onClick={onConfirm}>{confirmLabel}</Button></>
+              : <Button variant="outline" onClick={onClose}>Listo</Button>}
+          </Flex>
+        </Box>
       </Box>
     </Flex>
   );
@@ -334,20 +369,11 @@ function ComboAdditionsModal({ comboChildren, additions, additionsByChild, onClo
           return (
             <Box key={child.productId} mt="4">
               <Text fontSize="sm" fontWeight="semibold" color="gray.600" mb="2">{label}:</Text>
-              <Flex gap="2" wrap="wrap">
-                {additions.map((addition) => {
-                  const qty = quantities[addition.id] ?? 0;
-                  const disabled = addition.stock !== null && addition.stock <= 0;
-                  return (
-                    <Flex key={addition.id} borderWidth="1px" borderColor={qty ? "purple.300" : "gray.200"} bg={qty ? "purple.50" : "white"} p="2" align="center" gap="2" borderRadius="sm">
-                      <Text fontSize="sm">{addition.name}{addition.price ? ` +${money(addition.price)}` : ""}</Text>
-                      <Button size="xs" variant="outline" disabled={!qty} onClick={() => onChange(child.productId, addition.id, -1)}><Minus size={13} /></Button>
-                      <Text minW="18px" textAlign="center" fontSize="sm">{qty}</Text>
-                      <Button size="xs" colorPalette="purple" disabled={disabled} onClick={() => onChange(child.productId, addition.id, 1)}><Plus size={13} /></Button>
-                    </Flex>
-                  );
-                })}
-              </Flex>
+              <AdditionsGrid
+                additions={additions}
+                quantities={quantities}
+                onChange={(additionId, delta) => onChange(child.productId, additionId, delta)}
+              />
             </Box>
           );
         })}

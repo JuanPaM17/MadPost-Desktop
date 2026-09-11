@@ -126,8 +126,8 @@ function CartPanel({ cash, active, items, additions, sauces, maxSauces, total, o
         <Text fontWeight="semibold">{item.name}</Text>
         <Flex gap="1">
           <Tip text="Nota"><Button size="xs" variant="ghost" onClick={() => setNoteKey(noteKey === item.key ? null : item.key)}><MessageSquare size={15} /></Button></Tip>
-          {item.showSauces || item.children.some((child) => child.showSauces) ? <Tip text="Salsas"><Button size="xs" variant="ghost" colorPalette="green" onClick={() => setSauceTarget({ key: item.key })}><Flame size={15} /></Button></Tip> : null}
-          {item.showAdditions || item.children.some((child) => child.showAdditions) ? <Tip text="Adiciones"><Button size="xs" variant="ghost" colorPalette="purple" onClick={() => setAdditionTarget({ key: item.key })}><Plus size={15} /></Button></Tip> : null}
+          {item.showSauces ? <Tip text="Salsas"><Button size="xs" variant="ghost" colorPalette="green" onClick={() => setSauceTarget({ key: item.key })}><Flame size={15} /></Button></Tip> : null}
+          {item.showAdditions ? <Tip text="Adiciones"><Button size="xs" variant="ghost" colorPalette="purple" onClick={() => setAdditionTarget({ key: item.key })}><Plus size={15} /></Button></Tip> : null}
           <Tip text="Eliminar"><Button size="xs" variant="ghost" colorPalette="red" onClick={() => onChangeQuantity(item.key, -item.quantity)}><X size={15} /></Button></Tip>
         </Flex>
       </Flex>
