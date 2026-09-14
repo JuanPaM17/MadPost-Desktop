@@ -71,7 +71,7 @@ body {
 
 .tabs-scroll::-webkit-scrollbar {
   height: 4px;
-  width: 4px;
+  width: 0;
 }
 
 .tabs-scroll::-webkit-scrollbar-track {
