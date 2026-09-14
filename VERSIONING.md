@@ -60,7 +60,14 @@ En MadPost esto se usaria si se hace un cambio MAJOR y se quiere probar antes de
 
 ## Como publicar una nueva version
 
-### 1. Actualizar la version en dos archivos
+### 1. Actualizar la version en tres archivos
+
+`package.json`:
+```json
+{
+  "version": "X.Y.Z"
+}
+```
 
 `src-tauri/tauri.conf.json`:
 ```json
