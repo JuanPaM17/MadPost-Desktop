@@ -45,9 +45,18 @@ fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_
 fn unpublish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::NativeResult { mobile_api::unpublish_mdns(&state) }
 
 #[tauri::command]
-fn check_for_update() -> update_installer::UpdateCheckResult { update_installer::check_update() }
+async fn check_for_update() -> update_installer::UpdateCheckResult {
+    tauri::async_runtime::spawn_blocking(update_installer::check_update).await
+        .unwrap_or_else(|_| update_installer::UpdateCheckResult {
+            state: "unavailable".into(),
+            message: "No pudimos conectarnos para buscar actualizaciones.".into(),
+            update: None,
+        })
+}
 #[tauri::command]
-fn list_releases() -> Vec<update_installer::ReleaseEntry> { update_installer::list_releases() }
+async fn list_releases() -> Vec<update_installer::ReleaseEntry> {
+    tauri::async_runtime::spawn_blocking(update_installer::list_releases).await.unwrap_or_default()
+}
 
 #[tauri::command]
 fn install_update(app: tauri::AppHandle, download_url: String) -> update_installer::UpdateInstallResult {
