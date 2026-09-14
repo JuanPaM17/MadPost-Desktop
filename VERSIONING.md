@@ -143,18 +143,6 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
-### v1.2.0 — Deteccion de actualizaciones y mejoras visuales
-
-**Corregido:**
-- La deteccion de actualizaciones no funcionaba correctamente en versiones anteriores
-- Scroll vertical visible en los tabs de Configuracion
-
-**Nuevo:**
-- La version instalada ahora se muestra en la pantalla de inicio de sesion
-- En Configuracion > Sincronizacion aparece una tarjeta para migrar datos de una version anterior de MadPost si se detecta la base de datos antigua y aun no fue migrada
-
----
-
 ### v1.1.0 — Mesas, pago dividido y mejoras generales
 
 **Corregido:**

@@ -1,7 +1,101 @@
 use reqwest::{blocking::Client, header::{ACCEPT, AUTHORIZATION}};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+
+#[derive(Serialize)]
+pub struct UpdateCheckResult {
+    pub state: String,   // "upToDate" | "available" | "unavailable"
+    pub message: String,
+    pub update: Option<UpdateCheckInfo>,
+}
+
+#[derive(Serialize)]
+pub struct UpdateCheckInfo {
+    pub version: String,
+    #[serde(rename = "releaseUrl")]
+    pub release_url: String,
+    #[serde(rename = "downloadUrl")]
+    pub download_url: Option<String>,
+    #[serde(rename = "releaseNotes")]
+    pub release_notes: String,
+    pub forced: bool,
+}
+
+#[derive(Deserialize)]
+struct UpdateConfig { #[serde(rename = "latestVersion")] latest_version: String, #[serde(rename = "minimumVersion")] minimum_version: String }
+
+pub fn check_update() -> UpdateCheckResult {
+    if cfg!(debug_assertions) {
+        return UpdateCheckResult { state: "upToDate".into(), message: "Estas usando una version de desarrollo.".into(), update: None };
+    }
+    let repo = match github_repo() {
+        Ok(r) => r,
+        Err(_) => return UpdateCheckResult { state: "unavailable".into(), message: "No pudimos consultar actualizaciones ahora. Puedes seguir trabajando con normalidad.".into(), update: None },
+    };
+
+    let config_url = format!("https://raw.githubusercontent.com/{repo}/main/update-config.json");
+    let config: UpdateConfig = match get_json(&config_url, false) {
+        Ok(v) => match serde_json::from_value(v) {
+            Ok(c) => c,
+            Err(_) => return UpdateCheckResult { state: "unavailable".into(), message: "No pudimos consultar actualizaciones ahora. Puedes seguir trabajando con normalidad.".into(), update: None },
+        },
+        Err(_) => return UpdateCheckResult { state: "unavailable".into(), message: "No pudimos consultar actualizaciones ahora. Puedes seguir trabajando con normalidad.".into(), update: None },
+    };
+
+    let current = env!("CARGO_PKG_VERSION");
+    let forced = is_newer(&config.minimum_version, current);
+    let update_available = is_newer(&config.latest_version, current);
+
+    if !forced && !update_available {
+        return UpdateCheckResult { state: "upToDate".into(), message: "Tienes la version mas reciente instalada.".into(), update: None };
+    }
+
+    let releases_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let (release_url, release_notes, download_url) = match get_json(&releases_url, false) {
+        Ok(release) => {
+            let url = release.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let notes = release.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let dl = exe_asset_url(repo, &release);
+            (url, notes, dl)
+        }
+        Err(_) => (String::new(), String::new(), None),
+    };
+
+    UpdateCheckResult {
+        state: "available".into(),
+        message: if forced { "Esta version ya no es compatible. Debes actualizar para continuar.".into() } else { "Hay una actualizacion disponible para descargar.".into() },
+        update: Some(UpdateCheckInfo { version: config.latest_version, release_url, download_url, release_notes, forced }),
+    }
+}
+
+#[derive(Serialize)]
+pub struct ReleaseEntry { pub version: String, pub date: String, pub notes: String }
+
+pub fn list_releases() -> Vec<ReleaseEntry> {
+    let repo = match github_repo() { Ok(r) => r, Err(_) => return vec![] };
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
+    let releases: Value = match get_json(&url, false) { Ok(v) => v, Err(_) => return vec![] };
+    let arr = match releases.as_array() { Some(a) => a, None => return vec![] };
+    arr.iter().map(|r| {
+        let tag = r.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+        let version = tag.trim_start_matches('v').to_string();
+        let date = r.get("published_at").and_then(|v| v.as_str()).map(|s| s.get(..10).unwrap_or(s).to_string()).unwrap_or_default();
+        let notes = r.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        ReleaseEntry { version, date, notes }
+    }).collect()
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Option<[u64; 3]> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() < 3 { return None; }
+        Some([parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?])
+    };
+    let (l, c) = match (parse(latest), parse(current)) { (Some(l), Some(c)) => (l, c), _ => return false };
+    for i in 0..3 { if l[i] > c[i] { return true; } if l[i] < c[i] { return false; } }
+    false
+}
 
 #[derive(Serialize)]
 pub struct UpdateInstallResult { pub started: bool, pub message: String }
