@@ -158,7 +158,10 @@ fn get_json(url: &str, binary: bool) -> Result<Value, String> {
 
 fn get_bytes(url: &str, binary: bool) -> Result<Vec<u8>, String> {
     let client = Client::builder().timeout(Duration::from_secs(if binary { 300 } else { 10 })).build().map_err(|error| error.to_string())?;
-    let mut request = client.get(url).header(ACCEPT, if binary { "application/octet-stream" } else { "application/vnd.github+json" }).header("X-GitHub-Api-Version", "2022-11-28");
+    let mut request = client.get(url)
+        .header("User-Agent", "MadPost-Desktop")
+        .header(ACCEPT, if binary { "application/octet-stream" } else { "application/vnd.github+json" })
+        .header("X-GitHub-Api-Version", "2022-11-28");
     if let Some(token) = github_token() { request = request.header(AUTHORIZATION, format!("Bearer {token}")); }
     let response = request.send().map_err(|error| error.to_string())?;
     if !response.status().is_success() { return Err(format!("GitHub returned HTTP {}", response.status())); }

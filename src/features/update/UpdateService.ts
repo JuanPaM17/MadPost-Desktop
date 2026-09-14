@@ -10,17 +10,15 @@ class UpdateService {
   async checkForUpdate(): Promise<UpdateInfo | null> { return (await this.check()).update; }
 
   async check(): Promise<UpdateCheckResult> {
-    if (import.meta.env.DEV) return { state: "upToDate", message: "Estas usando una version de desarrollo.", update: null };
     try {
       return await invoke<UpdateCheckResult>("check_for_update");
     } catch (error) {
-      runtimeLogger.info("UpdateService", "No se pudo verificar actualizaciones; se continua normalmente.", { reason: error instanceof Error ? error.message : String(error) });
+      runtimeLogger.info("UpdateService", "check_for_update invoke failed", { reason: error instanceof Error ? error.message : String(error) });
       return { state: "unavailable", message: "No pudimos conectarnos para buscar actualizaciones. Puedes intentarlo de nuevo mas tarde.", update: null };
     }
   }
 
   async listReleases(): Promise<ReleaseEntry[]> {
-    if (import.meta.env.DEV) return [];
     try {
       return await invoke<ReleaseEntry[]>("list_releases");
     } catch { return []; }
