@@ -1,7 +1,5 @@
 import type { PosCategory, PosProduct, PosAddition, PosSauce, PosCombo } from "../features/pos/PosService";
-import type { DeliveryType } from "../features/config/BusinessConfigService";
-
-type BusinessConfig = Awaited<ReturnType<import("../features/config/BusinessConfigService").BusinessConfigService["load"]>>;
+import type { DeliveryType, BusinessConfig } from "../features/config/BusinessConfigService";
 
 const TTL_DEFAULT = 5 * 60 * 1000;
 const TTL_PRINTERS = 5 * 60 * 1000;

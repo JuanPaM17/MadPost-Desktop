@@ -531,7 +531,10 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void posService.categories().then(setCategories).catch(() => setCategories([])); }, []);
+  const [hasCombos, setHasCombos] = useState(false);
+  useEffect(() => {
+    void Promise.all([posService.categories(), posService.combos()]).then(([cats, cms]) => { setCategories(cats); setHasCombos(cms.length > 0); }).catch(() => setCategories([]));
+  }, []);
   useEffect(() => { void posService.additions().then(setAdditions).catch(() => setAdditions([])); }, []);
   useEffect(() => { void posService.sauces().then(({ items, max }) => { setSauces(items); setMaxSauces(max); }).catch(() => {}); }, []);
   useEffect(() => { void businessConfigService.load().then((s) => setThreshold(s.stockAlertThreshold)).catch(() => {}); }, []);
@@ -838,7 +841,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     <Flex h="full" minH="0">
       {/* Izquierda: catálogo */}
       <Flex direction="column" flex="1" minW="0" minH="0" pr="3">
-        <CategoryBar categories={categories} selected={selected} onSelect={setSelected} />
+        <CategoryBar categories={categories} selected={selected} hasCombos={hasCombos} onSelect={setSelected} />
         <Box mt="4" position="relative">
           <Search size={18} color="#64748b" style={{ position: "absolute", left: 13, top: 12, zIndex: 1 }} />
           <Input pl="11" placeholder="Buscar producto..." value={search} onChange={(e) => setSearch(e.target.value)} />

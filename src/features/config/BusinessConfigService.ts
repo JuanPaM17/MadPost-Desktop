@@ -45,4 +45,10 @@ type Row = { id: string; name: string | null; address: string | null; phone: str
 function normalizeWhatsapp(value: string | null | undefined): BusinessSettings["deliveryWhatsapp"] { return value === "SOLO_DOMICILIOS" || value === "TODAS" ? value : "NINGUNA"; }
 export function validPhone(value: string) { return value.replace(/\D/g, "").length >= 7; }
 export const businessConfigService = new BusinessConfigService();
+export type BusinessConfig = {
+  id: string; name: string; address: string; phone: string; taxId: string;
+  logoPath: string | null; invoiceFooter: string; stockAlertThreshold: number;
+  printerReceipt: string; printerKitchen: string; comandaCopies: number;
+  deliveryWhatsapp: "NINGUNA" | "SOLO_DOMICILIOS" | "TODAS";
+};
 export const printerService = new PrinterService();
