@@ -27,6 +27,8 @@ type SaleRow = {
   cash_session_id: string;
   session_number: number | null;
   client_name: string | null;
+  cash_amount: number | null;
+  card_amount: number | null;
 };
 
 type CashOption = { id: string; label: string };
@@ -89,7 +91,11 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
 
   if (filters.dateFrom) conditions.push("s.created_at >= $" + (params.push(filters.dateFrom + "T00:00:00.000Z")));
   if (filters.dateTo) conditions.push("s.created_at <= $" + (params.push(filters.dateTo + "T23:59:59.999Z")));
-  if (filters.paymentMethod) conditions.push("s.payment_method=$" + (params.push(filters.paymentMethod)));
+  if (filters.paymentMethod === "SPLIT") {
+    conditions.push("(s.cash_amount > 0 AND s.card_amount > 0)");
+  } else if (filters.paymentMethod) {
+    conditions.push("s.payment_method=$" + (params.push(filters.paymentMethod)) + " AND NOT (s.cash_amount > 0 AND s.card_amount > 0)");
+  }
   if (filters.collectedBy) conditions.push("s.collected_by_user_id=$" + (params.push(filters.collectedBy)));
   if (filters.attendedBy) conditions.push("s.user_id=$" + (params.push(filters.attendedBy)));
   if (filters.clientName) conditions.push("s.client_name LIKE $" + (params.push("%" + filters.clientName + "%")));
@@ -100,6 +106,7 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
   return database.select<SaleRow[]>(
     `SELECT s.id, s.invoice_number, s.created_at, s.payment_method, s.is_delivery, s.total, s.notes,
             s.cash_session_id, s.collected_by_display_name AS collected_by, s.client_name,
+            s.cash_amount, s.card_amount,
             COALESCE(u.display_name, u.username) AS attended_by,
             cs.session_number
      FROM sales s
@@ -330,7 +337,7 @@ export function HistoryView({ initialInvoice }: { initialInvoice?: string } = {}
                     <Table.Cell fontFamily="mono" fontSize="xs">{sale.invoice_number}</Table.Cell>
                     <Table.Cell whiteSpace="nowrap">{formatDate(sale.created_at)}</Table.Cell>
                     <Table.Cell>{sale.attended_by ?? "-"}</Table.Cell>
-                    <Table.Cell><Badge colorPalette={methodColor(sale.payment_method)}>{payLabel(sale.payment_method)}</Badge></Table.Cell>
+                    <Table.Cell><Badge colorPalette={methodColor(sale.payment_method, sale.cash_amount, sale.card_amount)}>{payLabel(sale.payment_method, sale.cash_amount, sale.card_amount)}</Badge></Table.Cell>
                     <Table.Cell>{sale.is_delivery ? <Badge colorPalette="blue">Domicilio</Badge> : <Badge colorPalette="gray">Salon</Badge>}</Table.Cell>
                     <Table.Cell textAlign="right" fontWeight="semibold">{money(sale.total)}</Table.Cell>
                   </Table.Row>
@@ -437,7 +444,7 @@ function buildSaleRequest(detail: SaleDetail): {
   });
 
   const paymentMethod: import("../pos/SaleService").SalePaymentMethod =
-    sale.payment_method === "CARD" ? "CARD" : sale.payment_method === "SPLIT" ? "SPLIT" : "CASH";
+    sale.payment_method === "CARD" ? "CARD" : isSplit(sale.cash_amount, sale.card_amount) ? "SPLIT" : "CASH";
 
   const req: import("../pos/SaleService").SaleRequest = {
     cash: { id: sale.cash_session_id, tenantId: "", userId: null, sessionNumber: sale.session_number ?? 0, openingAmount: 0, closingAmount: null, expectedAmount: null, status: "OPEN", openedAt: "", closedAt: null, userName: null },
@@ -731,23 +738,21 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
             {sale.collected_by ? <InfoRow label="Cobrado por" value={sale.collected_by} /> : null}
             {sale.session_number != null ? <InfoRow label="Caja" value={`#${sale.session_number}`} /> : null}
             {sale.client_name ? <InfoRow label="Cliente" value={sale.client_name} /> : null}
-            <InfoRow label="Pago" value={payLabel(sale.payment_method)} />
+            <InfoRow label="Pago" value={payLabel(sale.payment_method, sale.cash_amount, sale.card_amount)} />
           </Flex>
 
           {/* Payment breakdown */}
-          {sale.payment_method === "CASH" && sale.cash_given != null ? (
-            <Box mb="4" px="3" py="2" bg="green.50" borderRadius="md" borderWidth="1px" borderColor="green.100">
-              <InfoRow label="Recibido" value={money(sale.cash_given)} />
-              <InfoRow label="Cambio" value={money(Math.max(0, (sale.change_given ?? 0)))} />
-            </Box>
-          ) : null}
-
-          {sale.payment_method === "SPLIT" && sale.cash_amount != null ? (
+          {isSplit(sale.cash_amount, sale.card_amount) ? (
             <Box mb="4" px="3" py="2" bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.100">
-              <InfoRow label="Efectivo" value={money(sale.cash_amount)} />
+              <InfoRow label="Efectivo" value={money(sale.cash_amount ?? 0)} />
               <InfoRow label="Tarjeta" value={money(sale.card_amount ?? 0)} />
               {sale.cash_given != null ? <InfoRow label="Recibido" value={money(sale.cash_given)} /> : null}
               {sale.change_given != null ? <InfoRow label="Cambio" value={money(Math.max(0, sale.change_given))} /> : null}
+            </Box>
+          ) : sale.payment_method !== "CARD" && sale.cash_given != null ? (
+            <Box mb="4" px="3" py="2" bg="green.50" borderRadius="md" borderWidth="1px" borderColor="green.100">
+              <InfoRow label="Recibido" value={money(sale.cash_given)} />
+              <InfoRow label="Cambio" value={money(Math.max(0, (sale.change_given ?? 0)))} />
             </Box>
           ) : null}
 
@@ -1027,7 +1032,7 @@ function EditSaleModal({ sale, onClose, onSaved }: {
   onSaved: (updated: Partial<SaleDetail["sale"]>) => void;
 }) {
   type PM = import("../pos/SaleService").SalePaymentMethod;
-  const originalMethod = (sale.payment_method === "CARD" ? "CARD" : sale.payment_method === "SPLIT" ? "SPLIT" : "CASH") as PM;
+  const originalMethod = (sale.payment_method === "CARD" ? "CARD" : isSplit(sale.cash_amount, sale.card_amount) ? "SPLIT" : "CASH") as PM;
   const total = sale.total;
   const BILLS = [10_000, 20_000, 50_000, 100_000];
 
@@ -1327,12 +1332,18 @@ function FieldLabel({ label, children }: { label: string; children: React.ReactN
   return <Box mb="4"><Text mb="1" fontSize="sm" fontWeight="semibold" color="gray.700">{label}</Text>{children}</Box>;
 }
 
-function payLabel(method: string) {
-  return method === "CASH" ? "Efectivo" : method === "CARD" ? "Tarjeta" : method === "SPLIT" ? "Dividido" : method;
+function isSplit(cashAmount: number | null | undefined, cardAmount: number | null | undefined) {
+  return (cashAmount ?? 0) > 0 && (cardAmount ?? 0) > 0;
 }
 
-function methodColor(method: string) {
-  return method === "CASH" ? "green" : method === "CARD" ? "blue" : "orange";
+function payLabel(method: string, cashAmount?: number | null, cardAmount?: number | null) {
+  if (isSplit(cashAmount, cardAmount)) return "Dividido";
+  return method === "CARD" ? "Tarjeta" : "Efectivo";
+}
+
+function methodColor(method: string, cashAmount?: number | null, cardAmount?: number | null) {
+  if (isSplit(cashAmount, cardAmount)) return "orange";
+  return method === "CARD" ? "blue" : "green";
 }
 
 function money(value: number) {

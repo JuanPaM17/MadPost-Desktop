@@ -68,11 +68,7 @@ export function money(value: number) {
 // ---------------------------------------------------------------------------
 // CategoryBar / CategoryButton
 // ---------------------------------------------------------------------------
-export function CategoryBar({ categories, selected, onSelect }: { categories: PosCategory[]; selected: SelectedCategory; onSelect: (value: SelectedCategory) => void }) {
-  const [hasCombos, setHasCombos] = useState(false);
-  useEffect(() => {
-    void posService.combos().then((items) => setHasCombos(items.length > 0)).catch(() => setHasCombos(false));
-  }, []);
+export function CategoryBar({ categories, selected, hasCombos, onSelect }: { categories: PosCategory[]; selected: SelectedCategory; hasCombos: boolean; onSelect: (value: SelectedCategory) => void }) {
   return (
     <Box overflowX="auto" className="pos-category-scroll">
       <Flex w="max-content" gap="2" pb="2">
@@ -224,6 +220,10 @@ export function AdditionsModal({ name, additions, quantities, onClose, onChange,
   onConfirm?: () => void;
   confirmLabel?: string;
 }) {
+  const [search, setSearch] = useState("");
+  const filtered = search.trim()
+    ? additions.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()))
+    : additions;
   return (
     <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
       <Box w="full" maxW="560px" bg="white" boxShadow="2xl" borderRadius="md" display="flex" flexDirection="column" maxH="calc(100vh - 48px)">
@@ -233,9 +233,15 @@ export function AdditionsModal({ name, additions, quantities, onClose, onChange,
             <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
           </Flex>
           <Text mt="1" color="gray.500" fontSize="sm">{name}</Text>
+          {additions.length > 6 && (
+            <Box mt="3" position="relative">
+              <Search size={16} color="#64748b" style={{ position: "absolute", left: 11, top: 11, zIndex: 1 }} />
+              <Input pl="9" size="sm" placeholder="Buscar adicion..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            </Box>
+          )}
         </Box>
         <Box overflowY="auto" px="6" flex="1">
-          <AdditionsGrid additions={additions} quantities={quantities} onChange={onChange} />
+          <AdditionsGrid additions={filtered} quantities={quantities} onChange={onChange} />
         </Box>
         <Box p="6" pt="4">
           <Flex justify="end" gap="2">

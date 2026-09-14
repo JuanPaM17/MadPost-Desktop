@@ -174,8 +174,12 @@ fn send_raw_to_printer(printer_name: &str, data: &[u8]) -> Result<(), String> {
 
 #[tauri::command]
 fn list_printers() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-Command", "Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|error| format!("No fue posible consultar las impresoras: {error}"))?;
     if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }

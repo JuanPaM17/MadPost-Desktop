@@ -45,6 +45,7 @@ export function PosHeaderBar({ userName, active }: { userName: string; active: b
 
 function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) {
   const [categories, setCategories] = useState<PosCategory[]>([]);
+  const [hasActiveCombos, setHasActiveCombos] = useState(false);
   const [products, setProducts] = useState<PosProduct[]>([]);
   const [combos, setCombos] = useState<PosCombo[]>([]);
   const [selected, setSelected] = useState<SelectedCategory>("all");
@@ -57,11 +58,30 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
   const loadItems = useCallback(async (selection: SelectedCategory) => {
     setLoading(true);
     try {
-      if (selection === "combos") { setProducts([]); setCombos(await posService.combos()); }
-      else { setCombos([]); setProducts(await posService.products(selection === "all" ? null : selection)); }
+      if (selection === "combos") {
+        setProducts([]);
+        const loaded = await posService.combos();
+        setCombos(loaded);
+        setHasActiveCombos(loaded.length > 0);
+        if (loaded.length === 0) setSelected("all");
+      } else {
+        setCombos([]);
+        const loaded = await posService.products(selection === "all" ? null : selection);
+        setProducts(loaded);
+        if (selection !== "all" && loaded.length === 0) setSelected("all");
+      }
     } finally { setLoading(false); }
   }, []);
-  useEffect(() => { if (active) void posService.categories().then(setCategories).catch(() => setCategories([])); }, [active]);
+  useEffect(() => {
+    if (!active) return;
+    void Promise.all([posService.categories(), posService.products(null), posService.combos()])
+      .then(([cats, prods, combosResult]) => {
+        const activeIds = new Set(prods.map((p) => p.categoryId).filter(Boolean));
+        setCategories(cats.filter((c) => activeIds.has(c.id)));
+        setHasActiveCombos(combosResult.length > 0);
+      })
+      .catch(() => { setCategories([]); setHasActiveCombos(false); });
+  }, [active]);
   useEffect(() => { if (active) void posService.additions().then(setAdditions).catch(() => setAdditions([])); }, [active]);
   useEffect(() => { if (active) void posService.sauces().then(({ items, max }) => { setSauces(items); setMaxSauces(max); }).catch(() => {}); }, [active]);
   useEffect(() => { if (active) void loadItems(selected); }, [active, loadItems, selected]);
@@ -89,7 +109,7 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
   function changeChildAddition(key: string, productId: string, additionId: string, delta: number) { setCart((current) => current.map((item) => item.key !== key ? item : { ...item, children: item.children.map((child) => child.productId !== productId ? child : { ...child, additions: { ...child.additions, [additionId]: Math.max(0, (child.additions[additionId] ?? 0) + delta) } }) })); }
   function toggleSauce(key: string, sauceId: string) { setCart((current) => current.map((item) => { if (item.key !== key) return item; const has = item.sauces.includes(sauceId); if (!has && item.sauces.length >= maxSauces) return item; return { ...item, sauces: has ? item.sauces.filter((s) => s !== sauceId) : [...item.sauces, sauceId] }; })); }
   function toggleChildSauce(key: string, productId: string, sauceId: string) { setCart((current) => current.map((item) => item.key !== key ? item : { ...item, children: item.children.map((child) => { if (child.productId !== productId) return child; const has = child.sauces.includes(sauceId); if (!has && child.sauces.length >= maxSauces) return child; return { ...child, sauces: has ? child.sauces.filter((s) => s !== sauceId) : [...child.sauces, sauceId] }; }) })); }
-  return <Flex h="full" minH="0" align="stretch"><Flex flex="1" minW="0" minH="0" p="10" pr="5" direction="column"><Box mt="4"><CategoryBar categories={categories} selected={selected} onSelect={setSelected} /></Box><Box mt="5" maxW="500px" position="relative"><Search size={18} color="#64748b" style={{ position: "absolute", left: 13, top: 12, zIndex: 1 }} /><Input pl="11" placeholder="Buscar producto..." value={search} onChange={(event) => setSearch(event.target.value)} /></Box><ProductGrid products={productItems} combos={comboItems} loading={loading} onAdd={add} /></Flex><CartPanel cash={cash} active={active} items={cart} additions={additions} sauces={sauces} maxSauces={maxSauces} total={cartTotal} onChangeQuantity={changeQuantity} onAdditionChange={changeAddition} onChildAdditionChange={changeChildAddition} onSauceToggle={toggleSauce} onChildSauceToggle={toggleChildSauce} onNoteChange={updateNote} onOptionChange={changeOption} onChildOptionChange={changeChildOption} onClear={() => setCart([])} /></Flex>;
+  return <Flex h="full" minH="0" align="stretch"><Flex flex="1" minW="0" minH="0" p="10" pr="5" direction="column"><Box mt="4"><CategoryBar categories={categories} selected={selected} hasCombos={hasActiveCombos} onSelect={setSelected} /></Box><Box mt="5" maxW="500px" position="relative"><Search size={18} color="#64748b" style={{ position: "absolute", left: 13, top: 12, zIndex: 1 }} /><Input pl="11" placeholder="Buscar producto..." value={search} onChange={(event) => setSearch(event.target.value)} /></Box><ProductGrid products={productItems} combos={comboItems} loading={loading} onAdd={add} /></Flex><CartPanel cash={cash} active={active} items={cart} additions={additions} sauces={sauces} maxSauces={maxSauces} total={cartTotal} onChangeQuantity={changeQuantity} onAdditionChange={changeAddition} onChildAdditionChange={changeChildAddition} onSauceToggle={toggleSauce} onChildSauceToggle={toggleChildSauce} onNoteChange={updateNote} onOptionChange={changeOption} onChildOptionChange={changeChildOption} onClear={() => setCart([])} /></Flex>;
 }
 
 
@@ -153,6 +173,7 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
   const [cashGiven, setCashGiven] = useState("");
   const [cashGivenTouched, setCashGivenTouched] = useState(false);
   const [splitCash, setSplitCash] = useState("");
+  const [splitMode, setSplitMode] = useState<"cash" | "card">("cash");
   const [splitCashGiven, setSplitCashGiven] = useState("");
   const [splitCashGivenTouched, setSplitCashGivenTouched] = useState(false);
   const [orderNote, setOrderNote] = useState("");
@@ -166,8 +187,12 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
     if (!cashGivenTouched) setCashGiven(String(total));
   }, [total, cashGivenTouched]);
   useEffect(() => {
-    if (!splitCashGivenTouched) { const rest = total - Math.max(0, Number(splitCash) || 0); setSplitCashGiven(String(Math.max(0, rest))); }
-  }, [total, splitCash, splitCashGivenTouched]);
+    if (!splitCashGivenTouched) {
+      const inputNum = Math.min(Number(splitCash) || 0, total);
+      const cashPart = splitMode === "cash" ? inputNum : total - inputNum;
+      setSplitCashGiven(cashPart > 0 ? String(cashPart) : "");
+    }
+  }, [total, splitCash, splitMode, splitCashGivenTouched]);
 
   function handleDeliveryToggle(dt: DeliveryType) {
     setSelectedDelivery((prev) => prev?.id === dt.id ? null : dt);
@@ -184,7 +209,8 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
   }
 
   const cashNum = Number(cashGiven) || 0;
-  const splitCashNum = Math.min(Number(splitCash) || 0, total);
+  const splitInputNum = Math.min(Number(splitCash) || 0, total);
+  const splitCashNum = splitMode === "cash" ? splitInputNum : total - splitInputNum;
   const splitCardNum = total - splitCashNum;
   const splitCashGivenNum = Number(splitCashGiven) || 0;
   const changeCash = method === "cash" ? cashNum - total : splitCashGivenNum - splitCashNum;
@@ -247,11 +273,19 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
 
         {/* split fields */}
         {method === "split" ? <Box mb="5">
-          <Text fontSize="sm" color="gray.600" mb="1">Monto en efectivo</Text>
+          <Flex mb="2" gap="1" p="1" bg="gray.100" borderRadius="md" w="fit-content">
+            {(["cash", "card"] as const).map((m) => (
+              <Button key={m} size="xs" variant={splitMode === m ? "solid" : "ghost"} colorPalette={splitMode === m ? "purple" : "gray"}
+                onClick={() => { setSplitMode(m); setSplitCash(""); setSplitCashGivenTouched(false); }}>
+                {m === "cash" ? "Efectivo primero" : "Transferencia primero"}
+              </Button>
+            ))}
+          </Flex>
+          <Text fontSize="sm" color="gray.600" mb="1">{splitMode === "cash" ? "Monto en efectivo" : "Monto en transferencia"}</Text>
           <Input value={splitCash} onChange={(e) => setSplitCash(e.target.value)} type="number" placeholder="0" />
           {splitCashNum > 0 && splitCardNum > 0 ? <Flex mt="2" gap="3">
             <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Efectivo:</Text><Text fontSize="xs" fontWeight="semibold">{money(splitCashNum)}</Text></Flex>
-            <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Tarjeta:</Text><Text fontSize="xs" fontWeight="semibold">{money(splitCardNum)}</Text></Flex>
+            <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Tarjeta/Transfer.:</Text><Text fontSize="xs" fontWeight="semibold">{money(splitCardNum)}</Text></Flex>
           </Flex> : null}
           {splitInvalid && splitCash !== "" ? <Text fontSize="xs" color="red.500" mt="1">Ambas partes deben ser mayores a 0</Text> : null}
           {splitCashNum > 0 ? <Box mt="4">

@@ -5,12 +5,13 @@ import { notify } from "../../components/ui/AppToaster";
 import { PaginationControls } from "../../components/ui/PaginationControls";
 import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { comboService, type Combo, type ComboItem, type ComboProductOption } from "./ComboService";
+import { appCache } from "../../infrastructure/AppCache";
 
 export function CombosTab() {
   const [combos, setCombos] = useState<Combo[]>([]); const [search, setSearch] = useState(""); const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(10); const [loading, setLoading] = useState(true); const [editing, setEditing] = useState<Combo | null | undefined>(undefined); const [deleting, setDeleting] = useState<Combo | null>(null); const [deactivating, setDeactivating] = useState<Combo | null>(null);
   const filtered = useMemo(() => combos.filter((combo) => combo.name.toLowerCase().includes(search.trim().toLowerCase())), [combos, search]); const pageItems = pageSize ? filtered.slice((page - 1) * pageSize, page * pageSize) : filtered;
   useEffect(() => { void load(); }, []);
-  async function load() { setLoading(true); try { setCombos(await comboService.list()); } catch { notify.error("No fue posible cargar los combos."); } finally { setLoading(false); } }
+  async function load() { appCache.invalidate("combos"); setLoading(true); try { setCombos(await comboService.list()); } catch { notify.error("No fue posible cargar los combos."); } finally { setLoading(false); } }
   async function toggle(combo: Combo) { if (combo.active === 1) { setDeactivating(combo); return; } try { await comboService.setActive(combo, true); await load(); notify.success(`Combo activado: ${combo.name}`); } catch { notify.error("No fue posible activar el combo."); } }
   async function deactivate() { if (!deactivating) return; try { await comboService.setActive(deactivating, false); setDeactivating(null); await load(); notify.success(`Combo desactivado: ${deactivating.name}`); } catch { notify.error("No fue posible desactivar el combo."); } }
   async function remove() { if (!deleting) return; try { await comboService.remove(deleting); setDeleting(null); await load(); notify.success(`Combo eliminado: ${deleting.name}`); } catch { notify.error("No fue posible eliminar el combo."); } }

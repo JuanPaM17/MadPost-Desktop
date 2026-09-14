@@ -29,6 +29,14 @@ export const tablesService = {
     );
   },
 
+  async listAllTables(tenantId: string): Promise<RestaurantTable[]> {
+    const db = await databaseManager.database();
+    return db.select<RestaurantTable[]>(
+      "SELECT id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, created_at, updated_at FROM restaurant_tables WHERE tenant_id = $1 AND type = 'TABLE' AND active = 1 ORDER BY floor ASC, name ASC",
+      [tenantId],
+    );
+  },
+
   async listFloors(tenantId: string): Promise<number[]> {
     const db = await databaseManager.database();
     const rows = await db.select<{ floor: number }[]>(

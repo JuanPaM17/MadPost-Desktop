@@ -61,15 +61,15 @@ class BackupScheduler {
     const last = await backupService.latestBackupTime();
     if (!last) { runtimeLogger.info("BackupScheduler", "No hay backups previos; creando el inicial."); await backupService.createBackup(context.tenantId); return; }
     const now = new Date();
-    const candidates = [slot(daysAgo(1), 23), slot(now, 14), slot(now, 23)];
+    const candidates = [slot(daysAgo(1), 23), slot(now, 17, 30), slot(now, 23)];
     if (candidates.some((candidate) => candidate > last && candidate < now)) { runtimeLogger.info("BackupScheduler", "Slot de backup perdido; creando copia de compensacion."); await backupService.createBackup(context.tenantId); }
   }
 
   private async uploadPending(context: RuntimeContext) { await backupService.uploadPendingBackups(context.tenantId); await backupService.uploadPendingLogs(context.tenantId); }
 }
 
-function slot(date: Date, hour: number) { const target = new Date(date); target.setHours(hour, 0, 0, 0); return target; }
+function slot(date: Date, hour: number, minute = 0) { const target = new Date(date); target.setHours(hour, minute, 0, 0); return target; }
 function daysAgo(days: number) { const date = new Date(); date.setDate(date.getDate() - days); return date; }
-function millisecondsToNextSlot() { const now = new Date(); const target = now < slot(now, 14) ? slot(now, 14) : now < slot(now, 23) ? slot(now, 23) : slot(daysAgo(-1), 14); return target.getTime() - now.getTime(); }
+function millisecondsToNextSlot() { const now = new Date(); const target = now < slot(now, 17, 30) ? slot(now, 17, 30) : now < slot(now, 23) ? slot(now, 23) : slot(daysAgo(-1), 17, 30); return target.getTime() - now.getTime(); }
 
 export const backupScheduler = new BackupScheduler();

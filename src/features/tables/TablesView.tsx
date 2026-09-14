@@ -70,9 +70,216 @@ function getTableStatus(order: TableOrder | undefined): TableStatus {
   return "occupied";
 }
 
+function MergeTableModal({ srcTable, srcOrder, cash, tenantId, session, allTables, openOrders, onClose, onMerged }: {
+  srcTable: RestaurantTable;
+  srcOrder: TableOrder | null;
+  cash: CashSession | null;
+  tenantId: string;
+  session: { user: { id: string } } | null;
+  allTables: RestaurantTable[];
+  openOrders: Map<string, TableOrder>;
+  onClose: () => void;
+  onMerged: (srcTableId: string, srcOrderUpdated: TableOrder, destOrder: TableOrder, destCanvasInfo: TableCanvasInfo) => void;
+}) {
+  const [clients, setClients] = useState<TableOrderClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!srcOrder) { setLoading(false); return; }
+    setLoading(true);
+    tableOrderService.getClients(srcOrder.id)
+      .then((c) => {
+        setClients(c);
+        if (c.length > 1) setError("No se puede unir una mesa con multiples clientes. Transfiere clientes individualmente o cobra primero.");
+      })
+      .catch(() => setError("No fue posible cargar los datos de la mesa."))
+      .finally(() => setLoading(false));
+  }, [srcOrder?.id]);
+
+  async function handleMerge(destTable: RestaurantTable) {
+    if (!srcOrder || !session) return;
+    const destOrder = openOrders.get(destTable.id);
+    if (!destOrder) return;
+    setSaving(true);
+    try {
+      // Limpiar clientes vacios del destino
+      await tableOrderService.deleteEmptyClients(destOrder.id);
+
+      // Calcular siguiente numero de cliente en destino
+      const destClientsNow = await tableOrderService.getClients(destOrder.id);
+      const nextClientNumber = (Math.max(0, ...destClientsNow.map((c) => c.client_number)) + 1);
+
+      const srcClient = clients[0] ?? null;
+      if (srcClient) {
+        await tableOrderService.moveClientToOrder(srcClient.id, destOrder.id, nextClientNumber);
+      } else {
+        // Path legacy: sin cliente activo, mover items directamente
+        const items = await tableOrderService.getItemsForOrder(srcOrder.id);
+        const rootIds = items.filter((i) => !i.combo_table_order_item_id).map((i) => i.id);
+        if (rootIds.length && destClientsNow[0]) {
+          await tableOrderService.moveItems(rootIds, destOrder.id, destClientsNow[0].id);
+        }
+      }
+
+      // Marcar orden origen como MERGED
+      const mergedNotes = `MERGED:${destOrder.id}:${destTable.name}`;
+      await tableOrderService.setNotes(srcOrder.id, mergedNotes);
+      const srcOrderUpdated: TableOrder = { ...srcOrder, notes: mergedNotes };
+
+      // Calcular canvasInfo destino fresco
+      const [destClientsRefresh, destItemsRefresh, deliveryTypes] = await Promise.all([
+        tableOrderService.getClients(destOrder.id),
+        tableOrderService.getItemsForOrder(destOrder.id),
+        businessConfigService.deliveryTypes().catch(() => [] as DeliveryType[]),
+      ]);
+      const destItemsTotal = destItemsRefresh.filter((i) => !i.combo_table_order_item_id).reduce((s, i) => s + i.subtotal, 0);
+      const destDomTotal = destClientsRefresh.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
+      const destCanvasInfo: TableCanvasInfo = {
+        clientNames: resolveClientNames(destClientsRefresh, destTable.name),
+        total: destItemsTotal + destDomTotal,
+      };
+
+      notify.success(`Mesa ${srcTable.name} unida a ${destTable.name}.`);
+      onMerged(srcTable.id, srcOrderUpdated, destOrder, destCanvasInfo);
+    } catch (err) {
+      notify.error(`Error al unir mesas: ${String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!srcOrder) {
+    return (
+      <ModalOverlay title="Unir mesa" onClose={onClose}>
+        <Text color="gray.600">Esta mesa no tiene una orden activa.</Text>
+        <Flex mt="6" justify="end"><Button colorPalette="purple" onClick={onClose}>Cerrar</Button></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  if (!cash) {
+    return (
+      <ModalOverlay title="Sin caja abierta" onClose={onClose}>
+        <Text color="gray.600">Debes tener una caja abierta para unir mesas.</Text>
+        <Flex mt="6" justify="end"><Button colorPalette="purple" onClick={onClose}>Entendido</Button></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  if (loading) {
+    return (
+      <ModalOverlay title="Unir mesa" onClose={onClose}>
+        <Flex justify="center" py="8"><Spinner /></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  if (error) {
+    return (
+      <ModalOverlay title="Unir mesa" onClose={onClose}>
+        <Text color="red.600" fontSize="sm">{error}</Text>
+        <Flex mt="6" justify="end"><Button colorPalette="purple" onClick={onClose}>Entendido</Button></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  // Filtrar mesas elegibles: deben tener orden abierta, no ser la origen, y no estar en MERGED
+  const eligibleTables = allTables.filter((t) => {
+    if (t.id === srcTable.id || t.type !== "TABLE") return false;
+    const o = openOrders.get(t.id);
+    if (!o) return false;
+    if (o.notes?.startsWith("MERGED:")) return false;
+    return true;
+  });
+
+  const allDestTables = allTables.filter((t) => t.id !== srcTable.id && t.type === "TABLE");
+
+  const byFloor = new Map<number, RestaurantTable[]>();
+  for (const t of allDestTables) {
+    if (!byFloor.has(t.floor)) byFloor.set(t.floor, []);
+    byFloor.get(t.floor)!.push(t);
+  }
+
+  return (
+    <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+      <Box w="full" maxW="520px" bg="white" borderRadius="md" p="6" boxShadow="2xl" maxH="90vh" display="flex" flexDirection="column">
+        <Flex justify="space-between" align="center" mb="2">
+          <Heading size="md">Unir mesa — {srcTable.name}</Heading>
+          <Button size="sm" variant="ghost" onClick={onClose}><X size={17} /></Button>
+        </Flex>
+        <Text fontSize="sm" color="gray.500" mb="4">
+          Selecciona la mesa destino. Solo mesas con orden abierta pueden recibir la union.
+        </Text>
+        <Box flex="1" overflowY="auto" className="content-scroll">
+          {Array.from(byFloor.entries()).sort(([a], [b]) => a - b).map(([floor, floorTables]) => (
+            <Box key={floor} mb="4">
+              {byFloor.size > 1 && (
+                <Text fontSize="xs" fontWeight="bold" color="gray.400" mb="2" textTransform="uppercase">Piso {floor}</Text>
+              )}
+              <Box display="grid" gridTemplateColumns="repeat(auto-fill, minmax(140px, 1fr))" gap="2">
+                {floorTables.map((t) => {
+                  const order = openOrders.get(t.id);
+                  const eligible = eligibleTables.some((e) => e.id === t.id);
+                  const status = getTableStatus(order);
+                  const color = order ? STATUS_COLORS[status] : "#e5e7eb";
+                  const label = order ? STATUS_LABELS[status] : "Sin orden";
+                  const disabledReason = !order ? "Esta mesa no tiene una orden abierta" : order.notes?.startsWith("MERGED:") ? "Esta mesa ya esta unida a otra" : null;
+                  const inner = (
+                    <Box
+                      key={t.id}
+                      as={eligible ? "button" : "div"}
+                      w="full"
+                      borderWidth="2px"
+                      borderColor="gray.200"
+                      borderRadius="md"
+                      p="3"
+                      textAlign="left"
+                      opacity={eligible ? 1 : 0.45}
+                      cursor={eligible && !saving ? "pointer" : "not-allowed"}
+                      _hover={eligible ? { borderColor: "purple.400", bg: "purple.50" } : undefined}
+                      onClick={() => eligible && !saving && void handleMerge(t)}
+                    >
+                      <Text fontSize="sm" fontWeight="semibold" mb="1" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{t.name}</Text>
+                      <Flex align="center" gap="1">
+                        <Box w="9px" h="9px" borderRadius="full" bg={color} flexShrink="0" />
+                        <Text fontSize="xs" color="gray.500">{label}</Text>
+                      </Flex>
+                    </Box>
+                  );
+                  return (
+                    <Box key={t.id}>
+                      {disabledReason ? <Tip text={disabledReason}>{inner}</Tip> : inner}
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          ))}
+        </Box>
+        <Flex mt="4" justify="start">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+        </Flex>
+      </Box>
+    </Flex>
+  );
+}
+
+function resolveClientNames(clients: { client_name: string | null }[], fallback: string): string[] {
+  const named = clients.map((c) => c.client_name?.trim() ?? "").filter(Boolean);
+  return named.length > 0 ? named : [fallback];
+}
+
 function elapsedLabel(openedAt: string): string {
   const min = Math.floor((Date.now() - new Date(openedAt).getTime()) / 60_000);
-  return min < 60 ? `${min} min` : `${Math.floor(min / 60)}h ${min % 60}m`;
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return min % 60 === 0 ? `${h}h` : `${h}h ${min % 60}m`;
+  const d = Math.floor(h / 24);
+  const remH = h % 24;
+  const remM = min % 60;
+  return remH === 0 ? `${d}d ${remM}m` : remM === 0 ? `${d}d ${remH}h` : `${d}d ${remH}h ${remM}m`;
 }
 
 function TableShape({ table, status, order, info, selected, editMode }: {
@@ -167,6 +374,10 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   const [panelTable, setPanelTable] = useState<RestaurantTable | null>(null);
   const [openOrders, setOpenOrders] = useState<Map<string, TableOrder>>(new Map());
   const [canvasInfo, setCanvasInfo] = useState<Map<string, TableCanvasInfo>>(new Map());
+  const [cash, setCash] = useState<CashSession | null>(null);
+  const [transferSrcTable, setTransferSrcTable] = useState<RestaurantTable | null>(null);
+  const [mergeSrcTable, setMergeSrcTable] = useState<RestaurantTable | null>(null);
+  const [panelReloadKey, setPanelReloadKey] = useState(0);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; startMouseX: number; startMouseY: number; startPosX: number; startPosY: number } | null>(null);
@@ -193,7 +404,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           tableOrderService.getItemsForOrder(o.id),
         ]);
         const tableName = rows.find((t) => t.id === o.table_id)?.name ?? "";
-        const names = clients.map((c) => c.client_name?.trim() || tableName);
+        const names = resolveClientNames(clients, tableName);
         const itemsTotal = items.filter((i) => !i.combo_table_order_item_id).reduce((s, i) => s + i.subtotal, 0);
         const domTotal = clients.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
         infoMap.set(o.table_id, { clientNames: names, total: itemsTotal + domTotal });
@@ -205,6 +416,8 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   }, [tenantId, currentFloor]);
 
   useEffect(() => { void loadTables(); }, [loadTables]);
+
+  useEffect(() => { void cashRegisterService.getOpenSession().then(setCash); }, []);
 
   // Close context menu on outside click (left button only — right click opens a new one)
   useEffect(() => {
@@ -672,8 +885,29 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           onClose={() => { setPanelTable(null); setSelected(null); }}
           onTableOpened={(order) => { setOpenOrders((prev) => new Map(prev).set(order.table_id, order)); }}
           onTableClosed={(tableId) => {
-            setOpenOrders((prev) => { const next = new Map(prev); next.delete(tableId); return next; });
-            setCanvasInfo((prev) => { const next = new Map(prev); next.delete(tableId); return next; });
+            const mergedToDelete: string[] = [];
+            setOpenOrders((prev) => {
+              const closedOrderId = prev.get(tableId)?.id;
+              const next = new Map(prev);
+              next.delete(tableId);
+              if (closedOrderId) {
+                const prefix = `MERGED:${closedOrderId}:`;
+                for (const [tid, o] of next) {
+                  if (o.notes?.startsWith(prefix)) {
+                    void tableOrderService.deleteOrder(o.id).catch(() => {});
+                    next.delete(tid);
+                    mergedToDelete.push(tid);
+                  }
+                }
+              }
+              return next;
+            });
+            setCanvasInfo((prev) => {
+              const next = new Map(prev);
+              next.delete(tableId);
+              for (const tid of mergedToDelete) next.delete(tid);
+              return next;
+            });
           }}
           onComandaSent={(tableId) => {
             setOpenOrders((prev) => {
@@ -684,6 +918,11 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           }}
           onCanvasInfoChange={(tableId, info) => setCanvasInfo((prev) => new Map(prev).set(tableId, info))}
           onNavigate={onNavigate}
+          reloadKey={panelReloadKey}
+          onGoToTable={(tableId) => {
+            const t = tables.find((t) => t.id === tableId);
+            if (t) { setPanelTable(t); setSelected(tableId); }
+          }}
         />
       )}
 
@@ -713,8 +952,8 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
             </>
           ) : (
             <>
-              <ContextMenuItem label="Transferir mesa" onClick={() => { notify.error("Proximamente"); setContextMenu(null); }} />
-              <ContextMenuItem label="Unir mesa" onClick={() => { notify.error("Proximamente"); setContextMenu(null); }} />
+              <ContextMenuItem label="Transferir mesa" onClick={() => { setTransferSrcTable(contextMenu.table); setContextMenu(null); }} />
+              <ContextMenuItem label="Unir mesa" onClick={() => { setMergeSrcTable(contextMenu.table); setContextMenu(null); }} />
             </>
           )}
         </Box>
@@ -769,11 +1008,77 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           </Flex>
         </ModalOverlay>
       )}
+
+      {/* Transfer table modal */}
+      {transferSrcTable && cash && (
+        <TransferTableModal
+          srcTable={transferSrcTable}
+          srcOrder={openOrders.get(transferSrcTable.id) ?? null}
+          cash={cash}
+          tenantId={tenantId}
+          session={session}
+          onClose={() => setTransferSrcTable(null)}
+          onTransferred={(srcTableId, destOrder, srcFullyEmpty, destCanvasInfo, srcCanvasInfo) => {
+            setTransferSrcTable(null);
+            setOpenOrders((prev) => {
+              const next = new Map(prev);
+              if (srcFullyEmpty) next.delete(srcTableId);
+              next.set(destOrder.table_id, destOrder);
+              return next;
+            });
+            setCanvasInfo((prev) => {
+              const next = new Map(prev);
+              if (srcFullyEmpty) next.delete(srcTableId);
+              else if (srcCanvasInfo) next.set(srcTableId, srcCanvasInfo);
+              next.set(destOrder.table_id, destCanvasInfo);
+              return next;
+            });
+            if (srcFullyEmpty) {
+              setPanelTable(null);
+              setSelected(null);
+            } else {
+              setPanelReloadKey((k) => k + 1);
+            }
+          }}
+        />
+      )}
+      {transferSrcTable && !cash && (
+        <ModalOverlay title="Sin caja abierta" onClose={() => setTransferSrcTable(null)}>
+          <Text color="gray.600">Debes tener una caja abierta para transferir mesas.</Text>
+          <Flex mt="6" justify="end"><Button colorPalette="purple" onClick={() => setTransferSrcTable(null)}>Entendido</Button></Flex>
+        </ModalOverlay>
+      )}
+
+      {/* Merge table modal */}
+      {mergeSrcTable && (
+        <MergeTableModal
+          srcTable={mergeSrcTable}
+          srcOrder={openOrders.get(mergeSrcTable.id) ?? null}
+          cash={cash}
+          tenantId={tenantId}
+          session={session}
+          allTables={tables}
+          openOrders={openOrders}
+          onClose={() => setMergeSrcTable(null)}
+          onMerged={(srcTableId, srcOrderUpdated, destOrder, destCanvasInfo) => {
+            setMergeSrcTable(null);
+            setOpenOrders((prev) => new Map(prev).set(srcTableId, srcOrderUpdated).set(destOrder.table_id, destOrder));
+            setCanvasInfo((prev) => {
+              const next = new Map(prev);
+              const srcName = tables.find((t) => t.id === srcTableId)?.name ?? "";
+              next.set(srcTableId, { clientNames: [srcName], total: 0 });
+              next.set(destOrder.table_id, destCanvasInfo);
+              return next;
+            });
+            setPanelReloadKey((k) => k + 1);
+          }}
+        />
+      )}
     </Box>
   );
 }
 
-function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSent, onCanvasInfoChange, onNavigate }: { table: RestaurantTable; onClose: () => void; onTableOpened: (order: TableOrder) => void; onTableClosed: (tableId: string) => void; onComandaSent: (tableId: string) => void; onCanvasInfoChange: (tableId: string, info: TableCanvasInfo) => void; onNavigate: (view: string, param?: string) => void }) {
+function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSent, onCanvasInfoChange, onNavigate, reloadKey, onGoToTable }: { table: RestaurantTable; onClose: () => void; onTableOpened: (order: TableOrder) => void; onTableClosed: (tableId: string) => void; onComandaSent: (tableId: string) => void; onCanvasInfoChange: (tableId: string, info: TableCanvasInfo) => void; onNavigate: (view: string, param?: string) => void; reloadKey?: number; onGoToTable?: (tableId: string) => void }) {
   const [activeTab, setActiveTab] = useState<"cuenta" | "historial">("cuenta");
   const [cash, setCash] = useState<CashSession | null | "loading">("loading");
   const [order, setOrder] = useState<TableOrder | null | "loading">("loading");
@@ -793,7 +1098,7 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSen
       setOrder(o);
     }).catch(() => { if (mounted) { setCash(null); setOrder(null); } });
     return () => { mounted = false; };
-  }, [table.id]);
+  }, [table.id, reloadKey]);
 
   const resolvedOrder = order === "loading" ? undefined : order ?? undefined;
   const status = getTableStatus(resolvedOrder);
@@ -851,6 +1156,7 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSen
             onOrderClosed={() => { setOrder(null); onTableClosed(table.id); }}
             onComandaSent={() => { setOrder((prev) => prev && prev !== "loading" ? { ...prev, comanda_sent: 1 } : prev); onComandaSent(table.id); }}
             onCanvasInfoChange={(info) => onCanvasInfoChange(table.id, info)}
+            onGoToTable={onGoToTable}
           />
         ) : (
           <HistorialTab table={table} cash={cash} onNavigate={onNavigate} />
@@ -860,7 +1166,7 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSen
   );
 }
 
-function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComandaSent, onCanvasInfoChange }: {
+function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComandaSent, onCanvasInfoChange, onGoToTable }: {
   table: RestaurantTable;
   cash: CashSession | null | "loading";
   order: TableOrder | null | "loading";
@@ -868,12 +1174,15 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComanda
   onOrderClosed: () => void;
   onComandaSent?: () => void;
   onCanvasInfoChange?: (info: TableCanvasInfo) => void;
+  onGoToTable?: (tableId: string) => void;
 }) {
   const session = sessionContext.current();
   const [openModal, setOpenModal] = useState(false);
   const [clientName, setClientName] = useState("");
   const [saving, setSaving] = useState(false);
   const [openedJustNow, setOpenedJustNow] = useState(false);
+
+  useEffect(() => { setOpenedJustNow(false); }, [table.id]);
 
   if (cash === "loading" || order === "loading") {
     return <Flex h="full" align="center" justify="center"><Spinner /></Flex>;
@@ -890,16 +1199,29 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComanda
   // MERGED case
   if (order?.notes?.startsWith("MERGED:")) {
     const parts = order.notes.split(":");
+    const destOrderId = parts[1] ?? null;
     const destName = parts[2] ?? "otra mesa";
     return (
       <Flex h="full" direction="column" align="center" justify="center" gap="4">
         <Badge colorPalette="purple" fontSize="sm">Unida</Badge>
         <Text color="gray.600" textAlign="center" fontSize="sm">Esta mesa esta unida con <strong>{destName}</strong>.</Text>
-        <Button variant="outline" colorPalette="purple" onClick={() => notify.error("Proximamente")}>Ver cuenta de {destName}</Button>
+        <Text color="gray.400" textAlign="center" fontSize="xs">Los items y el cobro estan en {destName}. Esta mesa sigue ocupada fisicamente.</Text>
+        {destOrderId && onGoToTable && (
+          <Button colorPalette="purple" variant="outline" onClick={async () => {
+            const db_order = await tableOrderService.getOrderById(destOrderId).catch(() => null);
+            if (db_order) onGoToTable(db_order.table_id);
+            else notify.error("No se encontro la mesa destino.");
+          }}>Ver cuenta de {destName}</Button>
+        )}
         <Button variant="outline" colorPalette="red" onClick={async () => {
           if (!order) return;
-          await tableOrderService.setNotes(order.id, null).catch(() => notify.error("No fue posible desunir la mesa."));
-          notify.success("Mesa desunida.");
+          try {
+            await tableOrderService.deleteOrder(order.id);
+            onOrderClosed();
+            notify.success("Mesa desunida y cerrada.");
+          } catch {
+            notify.error("No fue posible desunir la mesa.");
+          }
         }}>Desunir mesa</Button>
       </Flex>
     );
@@ -1029,7 +1351,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
     const allI = Array.from(byClient.values()).flat().filter((i) => !i.combo_table_order_item_id);
     const itemsTotal = allI.reduce((s, i) => s + i.subtotal, 0);
     const domTotal = c.reduce((s, cl) => s + (dts.find((d) => d.id === cl.delivery_type_id)?.price ?? 0), 0);
-    onCanvasInfoChange?.({ clientNames: c.map((cl) => cl.client_name?.trim() || table.name), total: itemsTotal + domTotal });
+    onCanvasInfoChange?.({ clientNames: resolveClientNames(c, table.name), total: itemsTotal + domTotal });
     return c;
   };
 
@@ -1258,7 +1580,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
       const allI = Array.from(itemsByClient.values()).flat().filter((i) => !i.combo_table_order_item_id);
       const itemsTotal = allI.reduce((s, i) => s + i.subtotal, 0);
       const domTotal = remaining.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
-      onCanvasInfoChange?.({ clientNames: remaining.map((c) => c.client_name?.trim() || table.name), total: itemsTotal + domTotal });
+      onCanvasInfoChange?.({ clientNames: resolveClientNames(remaining, table.name), total: itemsTotal + domTotal });
     }
   }
 
@@ -1287,7 +1609,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               const allI = Array.from(itemsByClient.values()).flat().filter((i) => !i.combo_table_order_item_id);
               const itemsTotal = allI.reduce((s, i) => s + i.subtotal, 0);
               const domTotal = next.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
-              onCanvasInfoChange?.({ clientNames: next.map((c) => c.client_name?.trim() || table.name), total: itemsTotal + domTotal });
+              onCanvasInfoChange?.({ clientNames: resolveClientNames(next, table.name), total: itemsTotal + domTotal });
             }}
             onItemsChange={() => void reload()}
             onCancel={() => void handleCancelClient(client.id)}
@@ -2150,6 +2472,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
   const [cashGiven, setCashGiven] = useState("");
   const [cashGivenTouched, setCashGivenTouched] = useState(false);
   const [splitCash, setSplitCash] = useState("");
+  const [splitMode, setSplitMode] = useState<"cash" | "card">("cash");
   const [splitCashGiven, setSplitCashGiven] = useState("");
   const [splitCashGivenTouched, setSplitCashGivenTouched] = useState(false);
   const [orderNote, setOrderNote] = useState(client?.notes ?? order.notes ?? "");
@@ -2178,10 +2501,11 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
 
   useEffect(() => {
     if (!splitCashGivenTouched) {
-      const cashPart = Math.min(Number(splitCash) || 0, total);
+      const inputNum = Math.min(Number(splitCash) || 0, total);
+      const cashPart = splitMode === "cash" ? inputNum : total - inputNum;
       setSplitCashGiven(cashPart > 0 ? String(cashPart) : "");
     }
-  }, [total, splitCash, splitCashGivenTouched]);
+  }, [total, splitCash, splitMode, splitCashGivenTouched]);
 
   function handleDeliveryToggle(dt: DeliveryType) {
     setSelectedDelivery((prev) => prev?.id === dt.id ? null : dt);
@@ -2198,7 +2522,8 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
   }
 
   const cashNum = Number(cashGiven) || 0;
-  const splitCashNum = Math.min(Number(splitCash) || 0, total);
+  const splitInputNum = Math.min(Number(splitCash) || 0, total);
+  const splitCashNum = splitMode === "cash" ? splitInputNum : total - splitInputNum;
   const splitCardNum = total - splitCashNum;
   const splitCashGivenNum = Number(splitCashGiven) || 0;
   const changeCash = method === "cash" ? cashNum - total : splitCashGivenNum - splitCashNum;
@@ -2311,7 +2636,9 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
 
       onConfirmed(orderClosed);
     } catch (error) {
-      notify.error("Error al cobrar", error instanceof Error ? error.message : "Intenta de nuevo.");
+      const msg = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
+      console.error("[TableCheckoutModal] Error al cobrar:", error);
+      notify.error("Error al cobrar", msg || "Intenta de nuevo.");
     } finally {
       setSaving(false);
     }
@@ -2385,12 +2712,20 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
           {/* Dividido */}
           {method === "split" && (
             <Box mb="5">
-              <Text fontSize="sm" color="gray.600" mb="1">Monto en efectivo</Text>
+              <Flex mb="2" gap="1" p="1" bg="gray.100" borderRadius="md" w="fit-content">
+                {(["cash", "card"] as const).map((m) => (
+                  <Button key={m} size="xs" variant={splitMode === m ? "solid" : "ghost"} colorPalette={splitMode === m ? "purple" : "gray"}
+                    onClick={() => { setSplitMode(m); setSplitCash(""); setSplitCashGivenTouched(false); }}>
+                    {m === "cash" ? "Efectivo primero" : "Transferencia primero"}
+                  </Button>
+                ))}
+              </Flex>
+              <Text fontSize="sm" color="gray.600" mb="1">{splitMode === "cash" ? "Monto en efectivo" : "Monto en transferencia"}</Text>
               <Input value={splitCash} onChange={(e) => setSplitCash(e.target.value)} type="number" placeholder="0" />
               {splitCashNum > 0 && splitCardNum > 0 && (
                 <Flex mt="2" gap="3">
                   <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Efectivo:</Text><Text fontSize="xs" fontWeight="semibold">{fmtMoney(splitCashNum)}</Text></Flex>
-                  <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Tarjeta:</Text><Text fontSize="xs" fontWeight="semibold">{fmtMoney(splitCardNum)}</Text></Flex>
+                  <Flex align="center" gap="1"><Text fontSize="xs" color="gray.500">Tarjeta/Transfer.:</Text><Text fontSize="xs" fontWeight="semibold">{fmtMoney(splitCardNum)}</Text></Flex>
                 </Flex>
               )}
               {splitInvalid && splitCash !== "" && <Text fontSize="xs" color="red.500" mt="1">Ambas partes deben ser mayores a 0</Text>}
@@ -2972,5 +3307,388 @@ function FieldBox({ label, children }: { label: string; children: React.ReactNod
       <Text mb="2" fontWeight="semibold" fontSize="sm">{label}</Text>
       {children}
     </Box>
+  );
+}
+
+type TransferStep =
+  | { step: "select-client" }
+  | { step: "select-items"; clientId: string | null; clientName: string | null }
+  | { step: "select-table"; clientId: string | null; itemIds: string[] };
+
+function TransferTableModal({ srcTable, srcOrder, cash, tenantId, session, onClose, onTransferred }: {
+  srcTable: RestaurantTable;
+  srcOrder: TableOrder | null;
+  cash: CashSession;
+  tenantId: string;
+  session: { user: { id: string } } | null;
+  onClose: () => void;
+  onTransferred: (srcTableId: string, destOrder: TableOrder, srcFullyEmpty: boolean, destCanvasInfo: TableCanvasInfo, srcCanvasInfo: TableCanvasInfo | null) => void;
+}) {
+  const [transferStep, setTransferStep] = useState<TransferStep | null>(null);
+  const [clients, setClients] = useState<TableOrderClient[]>([]);
+  const [rootItems, setRootItems] = useState<TableOrderItem[]>([]);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [allTables, setAllTables] = useState<RestaurantTable[]>([]);
+  const [allOrders, setAllOrders] = useState<Map<string, TableOrder>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!srcOrder) { setLoading(false); return; }
+    setLoading(true);
+    Promise.all([
+      tableOrderService.getClients(srcOrder.id),
+      tableOrderService.getItemsForOrder(srcOrder.id),
+      tablesService.listAllTables(tenantId),
+    ]).then(async ([c, items, tables]) => {
+      const rootOnly = items.filter((i) => !i.combo_table_order_item_id);
+      const tableIds = tables.map((t) => t.id);
+      const orders = await tableOrderService.getOpenOrdersByTableIds(tableIds);
+      setClients(c);
+      setRootItems(rootOnly);
+      setAllTables(tables.filter((t) => t.id !== srcTable.id));
+      const oMap = new Map<string, TableOrder>(orders.map((o) => [o.table_id, o]));
+      setAllOrders(oMap);
+
+      // Determinar paso inicial
+      if (c.length > 1) {
+        setTransferStep({ step: "select-client" });
+      } else {
+        const clientId = c[0]?.id ?? null;
+        const clientName = c[0]?.client_name ?? null;
+        const clientItems = clientId ? rootOnly.filter((i) => i.table_order_client_id === clientId) : rootOnly;
+        if (clientItems.length <= 1) {
+          const ids = new Set(clientItems.map((i) => i.id));
+          setSelectedItemIds(ids);
+          setTransferStep({ step: "select-table", clientId, itemIds: Array.from(ids) });
+        } else {
+          const ids = new Set(clientItems.map((i) => i.id));
+          setSelectedItemIds(ids);
+          setTransferStep({ step: "select-items", clientId, clientName });
+        }
+      }
+    }).catch(() => notify.error("No fue posible cargar los datos de la mesa."))
+      .finally(() => setLoading(false));
+  }, [srcOrder?.id]);
+
+  function handleSelectClient(client: TableOrderClient) {
+    const clientItems = rootItems.filter((i) => i.table_order_client_id === client.id);
+    const ids = new Set(clientItems.map((i) => i.id));
+    setSelectedItemIds(ids);
+    if (clientItems.length <= 1) {
+      setTransferStep({ step: "select-table", clientId: client.id, itemIds: Array.from(ids) });
+    } else {
+      setTransferStep({ step: "select-items", clientId: client.id, clientName: client.client_name });
+    }
+  }
+
+  function toggleItem(id: string) {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll(clientId: string | null) {
+    const clientItems = rootItems.filter((i) => i.table_order_client_id === clientId);
+    const allSelected = clientItems.every((i) => selectedItemIds.has(i.id));
+    if (allSelected) {
+      setSelectedItemIds(new Set());
+    } else {
+      setSelectedItemIds(new Set(clientItems.map((i) => i.id)));
+    }
+  }
+
+  async function handleTransfer(destTable: RestaurantTable) {
+    if (!srcOrder || !session) return;
+    const step = transferStep;
+    if (!step || step.step !== "select-table") return;
+    setSaving(true);
+    try {
+      let destOrder = allOrders.get(destTable.id) ?? null;
+      const destWasFree = !destOrder;
+      if (!destOrder) {
+        destOrder = await tableOrderService.openOrder(tenantId, destTable.id, cash.id, session.user.id, null);
+      }
+
+      // Si el destino ya tenia orden, crear un cliente nuevo para no mezclar con los existentes
+      // Si estaba libre, usar el cliente que openOrder ya creo
+      let destClientId: string | null;
+      if (destWasFree) {
+        const destClients = await tableOrderService.getClients(destOrder.id);
+        destClientId = destClients[0]?.id ?? null;
+      } else {
+        const srcClientName = step.clientId ? clients.find((c) => c.id === step.clientId)?.client_name ?? null : null;
+        const newClient = await tableOrderService.addClient(destOrder.id, srcClientName);
+        destClientId = newClient.id;
+      }
+      if (!destClientId) throw new Error("Mesa destino sin cliente activo.");
+
+      // Copiar metadata del cliente origen al cliente destino (siempre es un cliente nuevo o recien creado)
+      if (step.clientId) {
+        await tableOrderService.copyClientMeta(step.clientId, destClientId);
+      }
+
+      await tableOrderService.moveItems(step.itemIds, destOrder.id, destClientId);
+
+      // Preservar el opened_at mas antiguo
+      if (new Date(srcOrder.opened_at) < new Date(destOrder.opened_at)) {
+        await tableOrderService.updateOpenedAt(destOrder.id, srcOrder.opened_at);
+        destOrder = { ...destOrder, opened_at: srcOrder.opened_at };
+      }
+
+      // Calcular canvasInfo del destino con datos frescos de BD
+      const [destClientsRefresh, destItemsRefresh, deliveryTypes] = await Promise.all([
+        tableOrderService.getClients(destOrder.id),
+        tableOrderService.getItemsForOrder(destOrder.id),
+        businessConfigService.deliveryTypes().catch(() => [] as DeliveryType[]),
+      ]);
+      const destItemsTotal = destItemsRefresh.filter((i) => !i.combo_table_order_item_id).reduce((s, i) => s + i.subtotal, 0);
+      const destDomTotal = destClientsRefresh.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
+      const destCanvasInfo: TableCanvasInfo = {
+        clientNames: resolveClientNames(destClientsRefresh, destTable.name),
+        total: destItemsTotal + destDomTotal,
+      };
+
+      // Verificar si el cliente origen quedo sin items root
+      const srcClientId = step.clientId;
+      const remaining = await tableOrderService.getItemsForOrder(srcOrder.id);
+      const remainingRoot = remaining.filter((i) => !i.combo_table_order_item_id && i.table_order_client_id === srcClientId);
+      if (remainingRoot.length === 0 && srcClientId) {
+        await tableOrderService.cancelClient(srcClientId);
+      }
+
+      // Verificar si la orden origen quedo completamente vacia (sin clientes activos)
+      const remainingClients = await tableOrderService.getClients(srcOrder.id);
+      const srcFullyEmpty = remainingClients.length === 0;
+      if (srcFullyEmpty) {
+        await tableOrderService.deleteOrder(srcOrder.id);
+      }
+
+      // Calcular canvasInfo del origen actualizado (si aun tiene clientes)
+      let srcCanvasInfo: TableCanvasInfo | null = null;
+      if (!srcFullyEmpty) {
+        const srcItemsRefresh = await tableOrderService.getItemsForOrder(srcOrder.id);
+        const srcItemsTotal = srcItemsRefresh.filter((i) => !i.combo_table_order_item_id).reduce((s, i) => s + i.subtotal, 0);
+        const srcDomTotal = remainingClients.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
+        srcCanvasInfo = {
+          clientNames: resolveClientNames(remainingClients, srcTable.name),
+          total: srcItemsTotal + srcDomTotal,
+        };
+      }
+
+      notify.success(`Items transferidos a ${destTable.name}.`);
+      onTransferred(srcTable.id, destOrder, srcFullyEmpty, destCanvasInfo, srcCanvasInfo);
+    } catch (err) {
+      notify.error(`Error al transferir: ${String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!srcOrder) {
+    return (
+      <ModalOverlay title="Transferir mesa" onClose={onClose}>
+        <Text color="gray.600">Esta mesa no tiene una orden activa.</Text>
+        <Flex mt="6" justify="end"><Button colorPalette="purple" onClick={onClose}>Cerrar</Button></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  if (loading || !transferStep) {
+    return (
+      <ModalOverlay title="Transferir mesa" onClose={onClose}>
+        <Flex justify="center" py="8"><Spinner /></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  // PASO 1: Seleccionar cliente
+  if (transferStep.step === "select-client") {
+    return (
+      <ModalOverlay title={`Transferir - ${srcTable.name}`} onClose={onClose}>
+        <Text fontSize="sm" color="gray.600" mb="4">Selecciona el cliente cuyos productos quieres transferir.</Text>
+        <Stack gap="2">
+          {clients.map((c) => {
+            const count = rootItems.filter((i) => i.table_order_client_id === c.id).length;
+            return (
+              <Box
+                key={c.id}
+                as="button"
+                w="full"
+                textAlign="left"
+                px="4"
+                py="3"
+                borderWidth="1px"
+                borderColor="gray.200"
+                borderRadius="md"
+                _hover={{ bg: "purple.50", borderColor: "purple.300" }}
+                onClick={() => handleSelectClient(c)}
+              >
+                <Flex align="center" justify="space-between">
+                  <Text fontWeight="semibold" fontSize="sm">{c.client_name ?? `Cliente ${c.client_number}`}</Text>
+                  <Badge colorPalette="purple">{count} {count === 1 ? "producto" : "productos"}</Badge>
+                </Flex>
+              </Box>
+            );
+          })}
+        </Stack>
+        <Flex mt="5" justify="end"><Button variant="outline" onClick={onClose}>Cancelar</Button></Flex>
+      </ModalOverlay>
+    );
+  }
+
+  // PASO 2: Seleccionar items
+  if (transferStep.step === "select-items") {
+    const clientId = transferStep.clientId;
+    const clientItems = rootItems.filter((i) => i.table_order_client_id === clientId);
+    const allSel = clientItems.every((i) => selectedItemIds.has(i.id));
+    return (
+      <ModalOverlay title={`Transferir - ${srcTable.name}`} onClose={onClose}>
+        <Text fontSize="sm" color="gray.600" mb="1">
+          {transferStep.clientName ? `Cliente: ${transferStep.clientName}` : `Cliente ${clients.find((c) => c.id === clientId)?.client_number ?? ""}`}
+        </Text>
+        <Text fontSize="sm" color="gray.500" mb="4">Selecciona los productos a transferir.</Text>
+        <Box mb="3">
+          <Box
+            as="button"
+            fontSize="xs"
+            color="purple.600"
+            fontWeight="semibold"
+            onClick={() => toggleAll(clientId)}
+          >
+            {allSel ? "Quitar todos" : "Seleccionar todos"}
+          </Box>
+        </Box>
+        <Stack gap="2" mb="5" maxH="260px" overflowY="auto" className="content-scroll">
+          {clientItems.map((item) => {
+            const checked = selectedItemIds.has(item.id);
+            return (
+              <Flex
+                key={item.id}
+                as="button"
+                align="center"
+                gap="3"
+                px="3"
+                py="2"
+                borderWidth="1px"
+                borderColor={checked ? "purple.300" : "gray.200"}
+                borderRadius="md"
+                bg={checked ? "purple.50" : "white"}
+                _hover={{ borderColor: "purple.300" }}
+                onClick={() => toggleItem(item.id)}
+                textAlign="left"
+                w="full"
+              >
+                <Box w="16px" h="16px" borderRadius="3px" borderWidth="2px" borderColor={checked ? "purple.500" : "gray.300"} bg={checked ? "purple.500" : "white"} flexShrink="0" display="flex" alignItems="center" justifyContent="center">
+                  {checked && <Check size={10} color="white" />}
+                </Box>
+                <Box flex="1">
+                  <Text fontSize="sm" fontWeight="medium">{item.quantity}x {item.product_name}</Text>
+                </Box>
+                <Text fontSize="sm" color="gray.500">${item.subtotal.toLocaleString("es-CO")}</Text>
+              </Flex>
+            );
+          })}
+        </Stack>
+        <Flex justify="space-between" align="center">
+          <Button variant="outline" onClick={() => {
+            if (clients.length > 1) setTransferStep({ step: "select-client" });
+            else onClose();
+          }}>Atras</Button>
+          <Button
+            colorPalette="purple"
+            disabled={selectedItemIds.size === 0}
+            onClick={() => setTransferStep({ step: "select-table", clientId, itemIds: Array.from(selectedItemIds) })}
+          >
+            Siguiente
+          </Button>
+        </Flex>
+      </ModalOverlay>
+    );
+  }
+
+  // PASO 3: Seleccionar mesa destino
+  const clientId = transferStep.clientId;
+  const itemIds = transferStep.itemIds;
+  const itemCount = itemIds.length;
+  return (
+    <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+      <Box w="full" maxW="520px" bg="white" borderRadius="md" p="6" boxShadow="2xl" maxH="90vh" display="flex" flexDirection="column">
+        <Flex justify="space-between" align="center" mb="2">
+          <Heading size="md">Seleccionar mesa destino</Heading>
+          <Button size="sm" variant="ghost" onClick={onClose}><X size={17} /></Button>
+        </Flex>
+        <Text fontSize="sm" color="gray.500" mb="4">
+          {srcTable.name} &rarr; {itemCount} {itemCount === 1 ? "producto" : "productos"}
+        </Text>
+        <Box flex="1" overflowY="auto" className="content-scroll">
+          {(() => {
+            const byFloor = new Map<number, RestaurantTable[]>();
+            for (const t of allTables) {
+              if (!byFloor.has(t.floor)) byFloor.set(t.floor, []);
+              byFloor.get(t.floor)!.push(t);
+            }
+            return Array.from(byFloor.entries()).sort(([a], [b]) => a - b).map(([floor, floorTables]) => (
+              <Box key={floor} mb="4">
+                {byFloor.size > 1 && (
+                  <Text fontSize="xs" fontWeight="bold" color="gray.400" mb="2" textTransform="uppercase">Piso {floor}</Text>
+                )}
+                <Box display="grid" gridTemplateColumns="repeat(auto-fill, minmax(140px, 1fr))" gap="2">
+                  {floorTables.map((t) => {
+                    const order = allOrders.get(t.id);
+                    const isMerged = order?.notes?.startsWith("MERGED:") ?? false;
+                    const disabled = saving || isMerged;
+                    const status = getTableStatus(order);
+                    const color = STATUS_COLORS[status];
+                    const label = STATUS_LABELS[status];
+                    const card = (
+                      <Box
+                        key={t.id}
+                        as={disabled ? "div" : "button"}
+                        w="full"
+                        borderWidth="2px"
+                        borderColor="gray.200"
+                        borderRadius="md"
+                        p="3"
+                        textAlign="left"
+                        opacity={disabled ? 0.45 : 1}
+                        cursor={disabled ? "not-allowed" : "pointer"}
+                        _hover={!disabled ? { borderColor: "purple.400", bg: "purple.50" } : undefined}
+                        onClick={() => !disabled && void handleTransfer(t)}
+                      >
+                        <Text fontSize="sm" fontWeight="semibold" mb="1" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{t.name}</Text>
+                        <Flex align="center" gap="1">
+                          <Box w="9px" h="9px" borderRadius="full" bg={color} flexShrink="0" />
+                          <Text fontSize="xs" color="gray.500">{label}</Text>
+                        </Flex>
+                      </Box>
+                    );
+                    return (
+                      <Box key={t.id}>
+                        {isMerged ? <Tip text="Esta mesa esta unida a otra. Desunela primero.">{card}</Tip> : card}
+                      </Box>
+                    );
+                  })}
+                </Box>
+              </Box>
+            ));
+          })()}
+        </Box>
+        <Flex mt="4" justify="start">
+          <Button variant="outline" onClick={() => {
+            const clientItems = rootItems.filter((i) => i.table_order_client_id === clientId);
+            if (clientItems.length <= 1) {
+              if (clients.length > 1) setTransferStep({ step: "select-client" });
+              else onClose();
+            } else {
+              const clientName = clients.find((c) => c.id === clientId)?.client_name ?? null;
+              setTransferStep({ step: "select-items", clientId, clientName });
+            }
+          }}>Atras</Button>
+        </Flex>
+      </Box>
+    </Flex>
   );
 }

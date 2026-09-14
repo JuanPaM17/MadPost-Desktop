@@ -5,6 +5,9 @@ import { deleteSyncService } from "../sync/DeleteSyncService";
 import { backupScheduler } from "../backup/BackupScheduler";
 import { syncCommandPoller } from "../sync/SyncCommandPoller";
 import { mobileDevicesService } from "../api/MobileDevicesService";
+import { posService } from "../pos/PosService";
+import { businessConfigService, printerService } from "../config/BusinessConfigService";
+import { appCache } from "../../infrastructure/AppCache";
 
 export type RuntimeContext = {
   tenantId: string;
@@ -70,11 +73,25 @@ class PostLoginCoordinator {
       }
       try { await service.start(context); } catch (error) { runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar un servicio.", error); }
     }
+    void this.warmupCache();
     runtimeLogger.info("PostLoginCoordinator", "Inicializacion posterior al login completada.", { tenantId: context.tenantId });
+  }
+
+  private async warmupCache() {
+    await Promise.allSettled([
+      posService.categories(),
+      posService.additions(),
+      posService.sauces(),
+      businessConfigService.load(),
+      businessConfigService.deliveryTypes(),
+      printerService.list(),
+    ]);
+    runtimeLogger.info("PostLoginCoordinator", "Cache precargado.", {});
   }
 
   async stop() {
     for (const service of [...this.services].reverse()) await service.stop();
+    appCache.invalidateAll();
     this.activeTenantId = null;
     runtimeLogger.info("PostLoginCoordinator", "Servicios de sesion detenidos.");
   }

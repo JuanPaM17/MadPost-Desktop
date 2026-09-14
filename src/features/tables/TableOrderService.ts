@@ -36,6 +36,15 @@ const instantNow = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
 export const tableOrderService = {
+  async getOrderById(orderId: string): Promise<TableOrder | null> {
+    const db = await databaseManager.database();
+    const rows = await db.select<TableOrder[]>(
+      "SELECT id, tenant_id, table_id, user_id, cash_session_id, client_name, status, opened_at, closed_at, notes FROM table_orders WHERE id = $1 LIMIT 1",
+      [orderId],
+    );
+    return rows[0] ?? null;
+  },
+
   async getOpenOrderByTable(tableId: string): Promise<TableOrder | null> {
     const db = await databaseManager.database();
     const rows = await db.select<TableOrder[]>(
@@ -334,6 +343,86 @@ export const tableOrderService = {
       "UPDATE table_orders SET status='CLOSED', closed_at=$1 WHERE id=$2",
       [instantNow(), orderId],
     );
+  },
+
+  async deleteEmptyClients(orderId: string): Promise<void> {
+    const db = await databaseManager.database();
+    await db.execute(
+      `DELETE FROM table_order_clients WHERE table_order_id=$1 AND id NOT IN (
+         SELECT DISTINCT table_order_client_id FROM table_order_items WHERE table_order_id=$1 AND table_order_client_id IS NOT NULL
+       )`,
+      [orderId],
+    );
+  },
+
+  async moveClientToOrder(clientId: string, destOrderId: string, nextClientNumber: number): Promise<void> {
+    const db = await databaseManager.database();
+    await db.execute(
+      "UPDATE table_order_clients SET table_order_id=$1, client_number=$2 WHERE id=$3",
+      [destOrderId, nextClientNumber, clientId],
+    );
+    await db.execute(
+      "UPDATE table_order_items SET table_order_id=$1 WHERE table_order_client_id=$2",
+      [destOrderId, clientId],
+    );
+    // Mover tambien hijos de combo que pertenezcan a items de ese cliente
+    const children = await db.select<{ id: string }[]>(
+      `SELECT toi.id FROM table_order_items toi
+       JOIN table_order_items parent ON toi.combo_table_order_item_id = parent.id
+       WHERE parent.table_order_client_id=$1`,
+      [clientId],
+    );
+    if (children.length) {
+      const cp = children.map((_, i) => `$${i + 2}`).join(",");
+      await db.execute(
+        `UPDATE table_order_items SET table_order_id=$1 WHERE id IN (${cp})`,
+        [destOrderId, ...children.map((c) => c.id)],
+      );
+    }
+  },
+
+  async copyClientMeta(srcClientId: string, destClientId: string): Promise<void> {
+    const db = await databaseManager.database();
+    const rows = await db.select<{ client_name: string | null; notes: string | null; delivery_type_id: string | null; is_card: number }[]>(
+      "SELECT client_name, notes, delivery_type_id, is_card FROM table_order_clients WHERE id=$1",
+      [srcClientId],
+    );
+    if (!rows.length) return;
+    const src = rows[0];
+    await db.execute(
+      "UPDATE table_order_clients SET client_name=$1, notes=$2, delivery_type_id=$3, is_card=$4 WHERE id=$5",
+      [src.client_name, src.notes, src.delivery_type_id, src.is_card, destClientId],
+    );
+  },
+
+  async moveItems(itemIds: string[], destOrderId: string, destClientId: string): Promise<void> {
+    if (!itemIds.length) return;
+    const db = await databaseManager.database();
+    const placeholders = itemIds.map((_, i) => `$${i + 3}`).join(",");
+    // Move root items
+    await db.execute(
+      `UPDATE table_order_items SET table_order_id=$1, table_order_client_id=$2 WHERE id IN (${placeholders})`,
+      [destOrderId, destClientId, ...itemIds],
+    );
+    // Move combo children that belong to any of those root items
+    const childPlaceholders = itemIds.map((_, i) => `$${i + 1}`).join(",");
+    const children = await db.select<{ id: string }[]>(
+      `SELECT id FROM table_order_items WHERE combo_table_order_item_id IN (${childPlaceholders})`,
+      itemIds,
+    );
+    if (children.length) {
+      const childIds = children.map((c) => c.id);
+      const cp = childIds.map((_, i) => `$${i + 3}`).join(",");
+      await db.execute(
+        `UPDATE table_order_items SET table_order_id=$1, table_order_client_id=$2 WHERE id IN (${cp})`,
+        [destOrderId, destClientId, ...childIds],
+      );
+    }
+  },
+
+  async updateOpenedAt(orderId: string, openedAt: string): Promise<void> {
+    const db = await databaseManager.database();
+    await db.execute("UPDATE table_orders SET opened_at=$1 WHERE id=$2", [openedAt, orderId]);
   },
 
   async deleteOrder(orderId: string): Promise<void> {

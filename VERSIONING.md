@@ -136,6 +136,28 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.1.0 — Mesas, pago dividido y mejoras generales
+
+**Corregido:**
+- El cobro con pago dividido (efectivo + tarjeta) fallaba silenciosamente sin guardar la venta
+- Ventana negra que aparecia brevemente al abrir la app en Windows
+- Productos y categorias recien creados no aparecian en el punto de venta hasta reiniciar la app
+
+**Mejorado:**
+- El historial ahora muestra correctamente los pagos divididos con el desglose de cuanto fue en efectivo y cuanto en tarjeta
+- Al cobrar en modo dividido, puedes elegir si el monto que ingresas es el efectivo o la transferencia
+- Las pantallas cargan mas rapido -- los datos se guardan en memoria y no se vuelven a consultar innecesariamente
+- Las adiciones tienen buscador en el punto de venta cuando hay muchas
+- El catalogo oculta automaticamente las categorias y combos que no tienen productos activos
+- Horario de copias de seguridad automaticas: 5:30 PM y 11:00 PM
+
+**Nuevo:**
+- Mesas: unir dos mesas en una sola para cobrar juntas
+- Mesas: transferir productos o clientes de una mesa a otra
+- Al cobrar una mesa que tenia otras unidas, las mesas origen se limpian automaticamente
+
+---
+
 ### v1.0.0 — Lanzamiento inicial
 
 Primera version oficial de MadPost Desktop para Windows. Todo lo que necesitas para gestionar tu negocio desde un solo lugar.

@@ -189,6 +189,7 @@ class SaleService {
     const changeGiven = req.changeGiven ?? null;
     const cashAmount = req.paymentMethod === "SPLIT" ? (req.cashAmount ?? null) : null;
     const cardAmount = req.paymentMethod === "SPLIT" ? (req.cardAmount ?? null) : null;
+    const dbPaymentMethod = req.paymentMethod === "SPLIT" ? "CASH" : req.paymentMethod;
 
     const clientName = req.clientName ?? null;
     const tableOrderId = req.tableOrderId ?? null;
@@ -213,7 +214,7 @@ class SaleService {
         $21,$22
       )`,
       [
-        saleId, tenantId, userId, req.cash.id, req.total, req.paymentMethod,
+        saleId, tenantId, userId, req.cash.id, req.total, dbPaymentMethod,
         cashGiven, changeGiven, invoiceNumber, req.notes ?? null, createdAt,
         isDelivery ? 1 : 0, tableOrderId, cashAmount, cardAmount,
         req.total,
@@ -227,7 +228,7 @@ class SaleService {
     // Step 2: Enqueue sale FIRST so FK order is correct when SyncService processes
     await syncQueueRepository.enqueue("sales", saleId, "INSERT", {
       id: saleId, tenant_id: tenantId, user_id: userId, cash_session_id: req.cash.id,
-      total: req.total, payment_method: req.paymentMethod,
+      total: req.total, payment_method: dbPaymentMethod,
       cash_given: cashGiven, change_given: changeGiven, invoice_number: invoiceNumber,
       notes: req.notes ?? null, created_at: createdAt,
       is_delivery: isDelivery ? 1 : 0, table_order_id: tableOrderId,

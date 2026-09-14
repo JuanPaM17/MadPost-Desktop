@@ -5,6 +5,7 @@ import { notify } from "../../components/ui/AppToaster";
 import { PaginationControls } from "../../components/ui/PaginationControls";
 import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { productService, type Product, type ProductOption, type ProductSupply, type ProductSupplyOption } from "./ProductService";
+import { appCache } from "../../infrastructure/AppCache";
 
 type StockMode = "infinite" | "direct" | "supplies";
 type CategoryOption = { id: string; name: string };
@@ -16,7 +17,7 @@ export function ProductsTab() {
   const activeFilterLabels = useMemo(() => [categoryFilter !== "ALL" ? `Categoria: ${categories.find((category) => category.id === categoryFilter)?.name ?? "Seleccionada"}` : null, statusFilter !== "ALL" ? `Estado: ${statusFilter === "1" ? "Activos" : "Desactivados"}` : null, stockFilter !== "ALL" ? `Stock: ${{ infinite: "Inventario infinito", direct: "Stock directo", supplies: "Insumos compartidos" }[stockFilter] ?? "Seleccionado"}` : null].filter((label): label is string => Boolean(label)), [categories, categoryFilter, statusFilter, stockFilter]);
   const pageItems = pageSize ? filtered.slice((page - 1) * pageSize, page * pageSize) : filtered;
   useEffect(() => { void load(); }, []);
-  async function load() { setLoading(true); try { const [items, categoryItems] = await Promise.all([productService.list(), productService.categories()]); setProducts(items); setCategories(categoryItems); } catch { notify.error("No fue posible cargar los productos."); } finally { setLoading(false); } }
+  async function load() { appCache.invalidate("products"); appCache.invalidate("categories"); setLoading(true); try { const [items, categoryItems] = await Promise.all([productService.list(), productService.categories()]); setProducts(items); setCategories(categoryItems); } catch { notify.error("No fue posible cargar los productos."); } finally { setLoading(false); } }
   async function requestDelete(product: Product) { const check = await productService.deletionCheck(product.id); if (!check.canDelete) { setProducts((current) => current.map((item) => item.id === product.id ? { ...item, deletionReason: check.reason } : item)); notify.error(`No puedes eliminar este producto. ${check.reason}.`); return; } setDeleting(product); }
   async function toggle(product: Product) { if (product.active === 1) { setDeactivating(product); return; } try { await productService.setActive(product, true); await load(); notify.success(`Producto activado: ${product.name}`); } catch { notify.error("No fue posible activar el producto."); } }
   async function confirmDeactivate() { if (!deactivating) return; try { await productService.setActive(deactivating, false); setDeactivating(null); await load(); notify.success(`Producto desactivado: ${deactivating.name}`); } catch { notify.error("No fue posible desactivar el producto."); } }
