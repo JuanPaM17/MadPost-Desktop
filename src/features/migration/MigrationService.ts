@@ -141,6 +141,26 @@ class MigrationService {
     }
   }
 
+  /** Lee react_migrated del tenant activo. */
+  async isReactMigrated(tenantId: string): Promise<boolean> {
+    try {
+      const { databaseManager } = await import("../../infrastructure/sqlite/DatabaseManager");
+      const db = await databaseManager.database();
+      const rows = await db.select<{ react_migrated: number }[]>("SELECT react_migrated FROM tenants WHERE id=$1", [tenantId]);
+      return (rows[0]?.react_migrated ?? 0) === 1;
+    } catch { return false; }
+  }
+
+  /** Marca react_migrated=1 y recarga la app para que el bootstrap active el dual-write. */
+  async markMigratedAndReload(tenantId: string): Promise<void> {
+    const { databaseManager } = await import("../../infrastructure/sqlite/DatabaseManager");
+    const db = await databaseManager.database();
+    await db.execute("UPDATE tenants SET react_migrated=1 WHERE id=$1", [tenantId]);
+    await metaRepository.set(META_KEY_MIGRATED, "1");
+    sessionStorage.setItem("auto_full_sync", "1");
+    window.location.reload();
+  }
+
   async bootCheck(onProgress?: (p: MigrationProgress) => void): Promise<void> {
     const migrated = await this.isMigrated();
     if (!migrated) return;

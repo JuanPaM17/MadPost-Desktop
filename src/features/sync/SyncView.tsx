@@ -1,10 +1,11 @@
 import { Box, Button, Flex, Heading, Stack, Text } from "@chakra-ui/react";
-import { AlertTriangle, CheckCircle, ChevronDown, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { notify } from "../../components/ui/AppToaster";
 import { sessionContext } from "../../core/session/SessionContext";
 import { connectivityMonitor } from "./ConnectivityMonitor";
 import { fullSyncService, type TableSyncProgress } from "./FullSyncService";
+import { migrationService } from "../migration/MigrationService";
 
 // ---------------------------------------------------------------------------
 // Store singleton — survives component unmount/remount
@@ -146,6 +147,61 @@ function formatElapsed(seconds: number) {
 // Component
 // ---------------------------------------------------------------------------
 
+function JavaSyncCard() {
+  const tenantId = sessionContext.current()?.tenantId;
+  const [visible, setVisible] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void Promise.all([migrationService.javaDbExists(), migrationService.isReactMigrated(tenantId)])
+      .then(([javaExists, alreadyMigrated]) => setVisible(javaExists && !alreadyMigrated));
+  }, [tenantId]);
+
+  if (!visible) return null;
+
+  async function handleSync() {
+    if (!tenantId || countdown !== null) return;
+    try {
+      await migrationService.markMigratedAndReload(tenantId);
+    } catch {
+      notify.error("No fue posible sincronizar con Java. Intenta de nuevo.");
+      return;
+    }
+    // markMigratedAndReload llama window.location.reload() -- este codigo no corre
+  }
+
+  function startCountdown() {
+    if (countdown !== null) return;
+    setCountdown(5);
+    let secs = 5;
+    const interval = setInterval(() => {
+      secs--;
+      setCountdown(secs);
+      if (secs <= 0) { clearInterval(interval); void handleSync(); }
+    }, 1000);
+  }
+
+  return (
+    <Panel mb="4">
+      <Flex align="start" gap="3">
+        <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0, marginTop: 2 }} />
+        <Box flex="1">
+          <Heading size="sm">Sincronizar version anterior</Heading>
+          <Text mt="1" fontSize="sm" color="gray.600">
+            Se detecto una base de datos de una version anterior de MadPost que aun no ha sido sincronizada.
+            Al confirmar se marcara la migracion y la app se recargara automaticamente.
+          </Text>
+          <Button mt="3" colorPalette="orange" disabled={countdown !== null} onClick={startCountdown}>
+            <RotateCcw size={15} />
+            {countdown !== null ? `Recargando en ${countdown}s...` : "Sincronizar version anterior"}
+          </Button>
+        </Box>
+      </Flex>
+    </Panel>
+  );
+}
+
 export function SyncView({ pendingLastSync }: { pendingLastSync?: string }) {
   const state = useSyncStore();
   const [logOpen, setLogOpen] = useState<string | null>(null);
@@ -155,11 +211,19 @@ export function SyncView({ pendingLastSync }: { pendingLastSync?: string }) {
     if (pendingLastSync && !store.lastSync) setStore({ lastSync: pendingLastSync });
   }, [pendingLastSync]);
 
+  useEffect(() => {
+    if (sessionStorage.getItem("auto_full_sync") === "1") {
+      sessionStorage.removeItem("auto_full_sync");
+      void runSync();
+    }
+  }, []);
+
   const isRunning = state.phase === "running";
   const isDone = state.phase === "done";
 
   return (
     <Box maxW="980px" mx="auto">
+      <JavaSyncCard />
       <Panel>
         <Heading size="sm">Sincronizacion completa</Heading>
         <Text mt="2" fontSize="sm" color="gray.600">
