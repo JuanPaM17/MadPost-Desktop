@@ -5,8 +5,8 @@ import { databaseManager } from "../infrastructure/sqlite/DatabaseManager";
 export type StartupResult = { screen: "license"; online: boolean } | { screen: "auth"; tenantId: string; tenantName: string };
 
 export async function startApplication(onInvalidLicense: () => void): Promise<StartupResult> {
-  // Si ya fue migrado y Java existe, habilitar dual-write silenciosamente.
-  if (await migrationService.isMigrated() && await migrationService.javaDbExists()) {
+  // Si existe la DB de Java, habilitar dual-write silenciosamente.
+  if (await migrationService.javaDbExists()) {
     databaseManager.enableDualWrite();
   }
 

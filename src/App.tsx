@@ -33,7 +33,7 @@ function App() {
 
   async function boot() {
     setScreen("loading");
-    if (await migrationService.isMigrated() && await migrationService.javaDbExists() && await migrationService.hasChanges()) {
+    if (await migrationService.javaDbExists() && await migrationService.hasChanges()) {
       setScreen("migrating");
       await migrationService.bootCheck((p) => setMigrationProgress(p));
       await new Promise<void>((resolve) => {

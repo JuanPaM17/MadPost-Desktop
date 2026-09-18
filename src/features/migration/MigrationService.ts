@@ -45,8 +45,7 @@ class MigrationService {
 
 
   /**
-   * Copia la DB de Java al AppData de React, marca react_migrated=1 en la copia,
-   * guarda el tamaño actual y habilita la escritura dual en DatabaseManager.
+   * Copia la DB de Java al AppData de React, guarda el mtime actual y habilita la escritura dual en DatabaseManager.
    * Llama onProgress con el estado actual.
    */
   async migrate(onProgress: (p: MigrationProgress) => void): Promise<boolean> {
@@ -79,12 +78,6 @@ class MigrationService {
 
       // Reabrir la DB de React y aplicar migraciones para que quede al dia.
       const db = await databaseManager.database();
-
-      // Marcar react_migrated=1 para que Java sepa que fue importada.
-      try {
-        await db.execute("ALTER TABLE tenants ADD COLUMN react_migrated INTEGER NOT NULL DEFAULT 0");
-      } catch { /* columna ya existe */ }
-      await db.execute("UPDATE tenants SET react_migrated = 1");
 
       // Limpiar sync_queue de entradas con IDs no-UUID que vinieron de Java (MD5 sin guiones).
       await db.execute(`DELETE FROM sync_queue WHERE synced_at IS NULL AND payload_json LIKE '%"id":"%' AND NOT (
@@ -141,29 +134,7 @@ class MigrationService {
     }
   }
 
-  /** Lee react_migrated del tenant activo. */
-  async isReactMigrated(tenantId: string): Promise<boolean> {
-    try {
-      const { databaseManager } = await import("../../infrastructure/sqlite/DatabaseManager");
-      const db = await databaseManager.database();
-      const rows = await db.select<{ react_migrated: number }[]>("SELECT react_migrated FROM tenants WHERE id=$1", [tenantId]);
-      return (rows[0]?.react_migrated ?? 0) === 1;
-    } catch { return false; }
-  }
-
-  /** Marca react_migrated=1 y recarga la app para que el bootstrap active el dual-write. */
-  async markMigratedAndReload(tenantId: string): Promise<void> {
-    const { databaseManager } = await import("../../infrastructure/sqlite/DatabaseManager");
-    const db = await databaseManager.database();
-    await db.execute("UPDATE tenants SET react_migrated=1 WHERE id=$1", [tenantId]);
-    await metaRepository.set(META_KEY_MIGRATED, "1");
-    sessionStorage.setItem("auto_full_sync", "1");
-    window.location.reload();
-  }
-
   async bootCheck(onProgress?: (p: MigrationProgress) => void): Promise<void> {
-    const migrated = await this.isMigrated();
-    if (!migrated) return;
     if (!(await this.javaDbExists())) return;
     if (await this.hasChanges()) {
       await this.migrate(onProgress ?? (() => {}));

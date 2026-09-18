@@ -1,6 +1,6 @@
 [package]
 name = "madpost-desktop"
-version = "1.1.0"
+version = "1.2.0"
 description = "Aplicacion de escritorio con React, TypeScript, Tauri y SQLite"
 authors = ["MadPost"]
 edition = "2021"
