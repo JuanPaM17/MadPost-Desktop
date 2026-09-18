@@ -60,7 +60,7 @@ En MadPost esto se usaria si se hace un cambio MAJOR y se quiere probar antes de
 
 ## Como publicar una nueva version
 
-### 1. Actualizar la version en tres archivos
+### 1. Actualizar la version en cuatro archivos
 
 `package.json`:
 ```json
@@ -81,6 +81,16 @@ En MadPost esto se usaria si se hace un cambio MAJOR y se quiere probar antes de
 [package]
 version = "X.Y.Z"
 ```
+
+`update-config.json` (en la raiz del repo):
+```json
+{
+  "latestVersion": "X.Y.Z",
+  "minimumVersion": "???"
+}
+```
+
+> Este archivo es el que consulta la app instalada para saber si hay una version nueva disponible. Si no se actualiza, los clientes no recibiran la notificacion de actualizacion aunque el release ya este publicado en GitHub.
 
 ### 2. Decidir si la actualizacion es obligatoria
 
@@ -142,6 +152,14 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 ---
 
 ## Historial de versiones
+
+### v1.2.0 — Sincronizacion automatica con datos anteriores
+
+**Mejorado:**
+- Si se detecta una base de datos de una instalacion anterior al iniciar la app, los datos se importan automaticamente sin pasos adicionales por parte del usuario.
+- Se elimino la pantalla de confirmacion en Configuracion > Sincronizacion para este proceso.
+
+---
 
 ### v1.1.0 — Mesas, pago dividido y mejoras generales
 
