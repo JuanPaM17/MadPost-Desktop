@@ -6,6 +6,8 @@ import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { sessionContext } from "../../core/session/SessionContext";
 import { syncQueueRepository } from "../../infrastructure/sqlite/repositories";
 import { excelService } from "./ExcelService";
+import { fullSyncService } from "../sync/FullSyncService";
+import { appCache } from "../../infrastructure/AppCache";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,7 +29,7 @@ export async function exportProductos(): Promise<boolean> {
   const db = await databaseManager.database();
   const tid = tenantId();
 
-  const [categorias, productos, adiciones, insumos, insumosProd, combos, comboItems, opciones, salsas] = await Promise.all([
+  const [categorias, productos, adiciones, insumos, insumosProd, combos, comboItems, opciones, salsas, tiposDomicilio, descuentos, mesas] = await Promise.all([
     db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, CASE WHEN show_additions=1 THEN 'Si' ELSE 'No' END AS Muestra_Adiciones, CASE WHEN show_sauces=1 THEN 'Si' ELSE 'No' END AS Muestra_Salsas FROM categories WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
     db.select<Record<string, string | number | null>[]>(
       `SELECT p.name AS Nombre, COALESCE(c.name,'') AS Categoria, p.price AS Precio,
@@ -50,6 +52,19 @@ export async function exportProductos(): Promise<boolean> {
        FROM product_options po JOIN products p ON p.id=po.product_id
        WHERE p.tenant_id=$1 AND po.active=1 ORDER BY p.name COLLATE NOCASE, po.sort_order`, [tid]),
     db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo FROM sauces WHERE tenant_id=$1 ORDER BY name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>("SELECT name AS Nombre, price AS Precio FROM delivery_types WHERE tenant_id=$1 ORDER BY sort_order, name COLLATE NOCASE", [tid]),
+    db.select<Record<string, string | number | null>[]>(
+      `SELECT p.name AS Producto, d.discount_type AS Tipo, d.discount_value AS Valor,
+              CASE WHEN d.active=1 THEN 'Si' ELSE 'No' END AS Activo,
+              COALESCE(d.start_date,'') AS Fecha_Inicio, COALESCE(d.end_date,'') AS Fecha_Fin
+       FROM discounts d JOIN products p ON p.id=d.product_id
+       WHERE d.tenant_id=$1 ORDER BY p.name COLLATE NOCASE`, [tid]),
+    db.select<Record<string, string | number | null>[]>(
+      `SELECT name AS Nombre, CAST(floor AS INTEGER) AS Piso,
+              shape AS Forma, width AS Ancho, height AS Alto,
+              pos_x AS Pos_X, pos_y AS Pos_Y, type AS Tipo,
+              CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo
+       FROM restaurant_tables WHERE tenant_id=$1 ORDER BY floor, name COLLATE NOCASE`, [tid]),
   ]);
 
   return excelService.exportWorkbook(`productos_adiciones_${todayStr()}`, [
@@ -62,6 +77,9 @@ export async function exportProductos(): Promise<boolean> {
     { name: "Combos_Items", rows: comboItems },
     { name: "Opciones_Productos", rows: opciones },
     { name: "Salsas", rows: salsas },
+    { name: "Tipos_Domicilio", rows: tiposDomicilio },
+    { name: "Descuentos", rows: descuentos },
+    { name: "Mesas", rows: mesas },
   ]);
 }
 
@@ -343,14 +361,15 @@ export async function importProductos(): Promise<ImportResult | null> {
     const opName = row.Opcion?.toString().trim();
     if (!prodName || !opName) continue;
     try {
-      const prodId = prodIdByName.get(prodName.toLowerCase());
+      const prodId = prodIdByName.get(prodName.toLowerCase()) ??
+        (await db.select<{ id: string }[]>("SELECT id FROM products WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, prodName]))[0]?.id;
       if (!prodId) { errors.push(`Opcion '${prodName}/${opName}': producto no encontrado`); continue; }
       const existing = await db.select<{ id: string }[]>("SELECT id FROM product_options WHERE product_id=$1 AND LOWER(name)=LOWER($2)", [prodId, opName]);
       if (existing[0]) {
         await db.execute("UPDATE product_options SET sort_order=$1 WHERE id=$2", [row.Orden ?? 0, existing[0].id]);
         updated++;
       } else {
-        await db.execute("INSERT INTO product_options(id,product_id,name,sort_order,active,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)", [crypto.randomUUID(), prodId, opName, row.Orden ?? 0, now]);
+        await db.execute("INSERT INTO product_options(id,product_id,name,sort_order,active) VALUES($1,$2,$3,$4,1)", [crypto.randomUUID(), prodId, opName, row.Orden ?? 0]);
         created++;
       }
     } catch (e) { errors.push(`Opcion '${prodName}/${opName}': ${String(e)}`); }
@@ -379,13 +398,88 @@ export async function importProductos(): Promise<ImportResult | null> {
       for (const item of items) {
         const pName = item.Producto?.toString().trim();
         if (!pName) continue;
-        const prodId = prodIdByName.get(pName.toLowerCase());
+        const prodId = prodIdByName.get(pName.toLowerCase()) ??
+          (await db.select<{ id: string }[]>("SELECT id FROM products WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, pName]))[0]?.id;
         if (!prodId) { errors.push(`Combo item '${name}/${pName}': producto no encontrado`); continue; }
         await db.execute("INSERT INTO combo_items(id,combo_id,product_id,quantity) VALUES($1,$2,$3,$4)", [crypto.randomUUID(), comboId, prodId, Number(item.Cantidad ?? 1)]);
       }
     } catch (e) { errors.push(`Combo '${name}': ${String(e)}`); }
   }
 
+  // 9. Tipos_Domicilio
+  const domRows = sheetRows<Record<string, unknown>>("Tipos_Domicilio");
+  for (const [index, row] of domRows.entries()) {
+    const name = row["Nombre"]?.toString().trim();
+    if (!name) continue;
+    try {
+      const price = numOrNull(row["Precio"]) ?? 0;
+      const existing = await db.select<{ id: string }[]>("SELECT id FROM delivery_types WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
+      if (existing[0]) {
+        await db.execute("UPDATE delivery_types SET price=$1,sort_order=$2,updated_at=$3 WHERE id=$4", [price, index, now, existing[0].id]);
+        updated++;
+      } else {
+        await db.execute("INSERT INTO delivery_types(id,tenant_id,name,price,sort_order,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)", [crypto.randomUUID(), tid, name, price, index, now]);
+        created++;
+      }
+    } catch (e) { errors.push(`Tipo_Domicilio '${name}': ${String(e)}`); }
+  }
+
+  // 10. Descuentos
+  const descRows = sheetRows<Record<string, unknown>>("Descuentos");
+  for (const row of descRows) {
+    const prodName = row["Producto"]?.toString().trim();
+    if (!prodName) continue;
+    try {
+      const prodId = prodIdByName.get(prodName.toLowerCase()) ??
+        (await db.select<{ id: string }[]>("SELECT id FROM products WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, prodName]))[0]?.id;
+      if (!prodId) { errors.push(`Descuento '${prodName}': producto no encontrado`); continue; }
+      const tipo = row["Tipo"]?.toString().toUpperCase() === "FIXED_PRICE" ? "FIXED_PRICE" : "PERCENT";
+      const valor = numOrNull(row["Valor"]) ?? 0;
+      const active = row["Activo"]?.toString().toLowerCase() !== "no" ? 1 : 0;
+      const startDate = row["Fecha_Inicio"]?.toString().trim() || null;
+      const endDate = row["Fecha_Fin"]?.toString().trim() || null;
+      const existing = await db.select<{ id: string }[]>("SELECT id FROM discounts WHERE tenant_id=$1 AND product_id=$2", [tid, prodId]);
+      if (existing[0]) {
+        await db.execute("UPDATE discounts SET discount_type=$1,discount_value=$2,active=$3,start_date=$4,end_date=$5,updated_at=$6 WHERE id=$7",
+          [tipo, valor, active, startDate, endDate, now, existing[0].id]);
+        updated++;
+      } else {
+        await db.execute("INSERT INTO discounts(id,tenant_id,product_id,discount_type,discount_value,active,start_date,end_date,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)",
+          [crypto.randomUUID(), tid, prodId, tipo, valor, active, startDate, endDate, now]);
+        created++;
+      }
+    } catch (e) { errors.push(`Descuento '${prodName}': ${String(e)}`); }
+  }
+
+  // 11. Mesas
+  const mesaRows = sheetRows<Record<string, unknown>>("Mesas");
+  for (const row of mesaRows) {
+    const name = row["Nombre"]?.toString().trim();
+    if (!name) continue;
+    try {
+      const piso = numOrNull(row["Piso"]) ?? 1;
+      const forma = row["Forma"]?.toString().toUpperCase() === "CIRCLE" ? "CIRCLE" : "RECT";
+      const ancho = numOrNull(row["Ancho"]) ?? 120;
+      const alto = numOrNull(row["Alto"]) ?? 80;
+      const posX = numOrNull(row["Pos_X"]) ?? 50;
+      const posY = numOrNull(row["Pos_Y"]) ?? 50;
+      const tipo = row["Tipo"]?.toString().toUpperCase() === "DECORATION" ? "DECORATION" : "TABLE";
+      const active = row["Activo"]?.toString().toLowerCase() !== "no" ? 1 : 0;
+      const existing = await db.select<{ id: string }[]>("SELECT id FROM restaurant_tables WHERE tenant_id=$1 AND LOWER(name)=LOWER($2) AND CAST(floor AS INTEGER)=$3", [tid, name, piso]);
+      if (existing[0]) {
+        await db.execute("UPDATE restaurant_tables SET shape=$1,width=$2,height=$3,pos_x=$4,pos_y=$5,type=$6,active=$7,updated_at=$8 WHERE id=$9",
+          [forma, ancho, alto, posX, posY, tipo, active, now, existing[0].id]);
+        updated++;
+      } else {
+        await db.execute("INSERT INTO restaurant_tables(id,tenant_id,name,shape,width,height,pos_x,pos_y,type,floor,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)",
+          [crypto.randomUUID(), tid, name, forma, ancho, alto, posX, posY, tipo, piso, active, now]);
+        created++;
+      }
+    } catch (e) { errors.push(`Mesa '${name}': ${String(e)}`); }
+  }
+
+  appCache.invalidateAll();
+  void fullSyncService.resetAndSync(tid);
   return { created, updated, errors };
 }
 

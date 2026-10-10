@@ -72,7 +72,7 @@ export const MENU_PERMISSION_MAP: Record<string, PermissionCode[]> = {
   statistics: ["statistics.view"],
   audit:      ["audit.view"],
   settings:   ["settings.view"],
-  users:      ["users.view", "users.roles"],
+  users:      ["users.view"],
 };
 
 // Permisos por defecto para ADMIN (todo excepto superadmin)

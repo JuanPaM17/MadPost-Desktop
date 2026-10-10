@@ -170,7 +170,7 @@ export function ExportImportView() {
           <Grid templateColumns="repeat(2, 1fr)" gap="4">
             <ExportCard
               title="Catalogo del negocio"
-              sub="9 hojas: Categorias, Productos, Adiciones, Insumos, Insumos_Productos, Combos, Combos_Items, Opciones_Productos, Salsas."
+              sub="12 hojas: Categorias, Productos, Adiciones, Insumos, Insumos_Productos, Combos, Combos_Items, Opciones_Productos, Salsas, Tipos_Domicilio, Descuentos, Mesas."
               id="export-productos"
               label="Exportar catalogo"
               icon={<Download size={16} />}
@@ -220,7 +220,7 @@ export function ExportImportView() {
               <Box p="4" borderWidth="1px" borderColor="gray.200" borderRadius="md">
                 <Text fontSize="sm" fontWeight="semibold" mb="1">Catalogo del negocio</Text>
                 <Text fontSize="xs" color="gray.500" mb="3">
-                  Orden de procesamiento: Categorias → Productos → Adiciones → Insumos → Insumos_Productos → Salsas → Opciones_Productos → Combos.
+                  Orden de procesamiento: Categorias → Productos → Adiciones → Insumos → Insumos_Productos → Salsas → Opciones_Productos → Combos → Tipos_Domicilio → Descuentos → Mesas.
                 </Text>
                 <ActionButton
                   id="import-productos"

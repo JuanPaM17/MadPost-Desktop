@@ -105,7 +105,7 @@ function App() {
     : screen === "login" ? <LoginView tenantName={tenant.name} onLogin={async (username, password) => { await showMain(await authService.login(tenant.id, username, password)); }} onRecovery={() => setScreen("recovery")} />
     : screen === "recovery" ? <RecoveryView onRecover={recover} onBack={() => setScreen("login")} />
     : screen === "setup" ? <SetupView tenantName={tenant.name} initialAddress={tenant.address} initialPhone={tenant.phone} initialTaxId={tenant.taxId} onFinish={finishSetup} />
-    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }} />;
+    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }} onSwitchUser={showMain} />;
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}

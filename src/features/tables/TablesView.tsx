@@ -1,6 +1,6 @@
 import { Badge, Box, Button, Flex, Heading, Input, Separator, Spinner, Stack, Text } from "@chakra-ui/react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, LayoutGrid, LayoutTemplate, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, LayoutGrid, LayoutTemplate, LockKeyhole, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
 import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, type CatalogConfirmResult } from "../pos/ProductCatalog";
 import { posService, type PosAddition, type PosSauce } from "../pos/PosService";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -1190,8 +1190,12 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComanda
 
   if (!cash) {
     return (
-      <Flex h="full" align="center" justify="center">
-        <Text color="red.500" textAlign="center" fontSize="sm">Debes abrir una caja antes de usar las mesas.</Text>
+      <Flex h="full" align="center" justify="center" px="4">
+        <Box w="full" maxW="500px" borderWidth="1px" borderColor="orange.200" bg="orange.50" p={{ base: "6", md: "8" }} textAlign="center">
+          <Flex mx="auto" w="54px" h="54px" align="center" justify="center" borderRadius="full" bg="orange.100" color="orange.600"><LockKeyhole size={26} /></Flex>
+          <Heading mt="5" size="md">Caja cerrada</Heading>
+          <Text mt="3" color="gray.600">Debes abrir una caja antes de usar las mesas.</Text>
+        </Box>
       </Flex>
     );
   }
