@@ -273,22 +273,23 @@ export async function importProductos(): Promise<ImportResult | null> {
   }
 
   // 4. Insumos
-  const insRows = sheetRows<{ Nombre?: string; Unidad?: string; Stock_Actual?: number; Umbral_Alerta?: number }>("Insumos");
+  const insRows = sheetRows<Record<string, unknown>>("Insumos");
   const insIdByName = new Map<string, string>();
   for (const row of insRows) {
-    const name = row.Nombre?.toString().trim();
+    const name = row["Nombre"]?.toString().trim();
     if (!name) continue;
     try {
       const existing = await db.select<{ id: string }[]>("SELECT id FROM supplies WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
-      const stockActual = numOrNull(row.Stock_Actual);
-      const umbral = numOrNull(row.Umbral_Alerta);
+      const stockActual = numOrNull(row["Stock_Actual"] ?? row["Stock Actual"]);
+      const umbral = numOrNull(row["Umbral_Alerta"] ?? row["Umbral Alerta"]);
+      const unidad = row["Unidad"]?.toString() || null;
       if (existing[0]) {
-        await db.execute("UPDATE supplies SET unit=$1,stock=$2,low_stock_threshold=$3,updated_at=$4 WHERE id=$5", [row.Unidad || null, stockActual, umbral, now, existing[0].id]);
+        await db.execute("UPDATE supplies SET unit=$1,stock=$2,low_stock_threshold=$3,updated_at=$4 WHERE id=$5", [unidad, stockActual, umbral, now, existing[0].id]);
         insIdByName.set(name.toLowerCase(), existing[0].id);
         updated++;
       } else {
         const id = crypto.randomUUID();
-        await db.execute("INSERT INTO supplies(id,tenant_id,name,unit,stock,low_stock_threshold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [id, tid, name, row.Unidad || null, stockActual, umbral, now]);
+        await db.execute("INSERT INTO supplies(id,tenant_id,name,unit,stock,low_stock_threshold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [id, tid, name, unidad, stockActual, umbral, now]);
         insIdByName.set(name.toLowerCase(), id);
         created++;
       }
@@ -296,21 +297,22 @@ export async function importProductos(): Promise<ImportResult | null> {
   }
 
   // 5. Insumos_Productos
-  const insProdRows = sheetRows<{ Producto?: string; Insumo?: string; Cantidad_Por_Venta?: number }>("Insumos_Productos");
+  const insProdRows = sheetRows<Record<string, unknown>>("Insumos_Productos");
   for (const row of insProdRows) {
-    const prodName = row.Producto?.toString().trim();
-    const insName = row.Insumo?.toString().trim();
+    const prodName = row["Producto"]?.toString().trim();
+    const insName = row["Insumo"]?.toString().trim();
     if (!prodName || !insName) continue;
     try {
       const prodId = prodIdByName.get(prodName.toLowerCase());
       const insId = insIdByName.get(insName.toLowerCase());
       if (!prodId || !insId) { errors.push(`Insumo_Producto '${prodName}/${insName}': producto o insumo no encontrado`); continue; }
       const existing = await db.select<{ product_id: string }[]>("SELECT product_id FROM product_supplies WHERE product_id=$1 AND supply_id=$2", [prodId, insId]);
+      const cantidad = numOrNull(row["Cantidad_Por_Venta"] ?? row["Cantidad Por Venta"]) ?? 1;
       if (existing[0]) {
-        await db.execute("UPDATE product_supplies SET quantity_per_sale=$1 WHERE product_id=$2 AND supply_id=$3", [numOrNull(row.Cantidad_Por_Venta) ?? 1, prodId, insId]);
+        await db.execute("UPDATE product_supplies SET quantity_per_sale=$1 WHERE product_id=$2 AND supply_id=$3", [cantidad, prodId, insId]);
         updated++;
       } else {
-        await db.execute("INSERT INTO product_supplies(product_id,supply_id,quantity_per_sale) VALUES($1,$2,$3)", [prodId, insId, numOrNull(row.Cantidad_Por_Venta) ?? 1]);
+        await db.execute("INSERT INTO product_supplies(product_id,supply_id,quantity_per_sale) VALUES($1,$2,$3)", [prodId, insId, cantidad]);
         created++;
       }
     } catch (e) { errors.push(`Insumo_Producto '${prodName}/${insName}': ${String(e)}`); }
