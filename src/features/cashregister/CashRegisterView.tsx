@@ -11,6 +11,7 @@ import {
   Text,
 } from "@chakra-ui/react";
 import {
+  AlertTriangle,
   Check,
   CircleDollarSign,
   Download,
@@ -43,7 +44,7 @@ export function CashRegisterView() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [dialog, setDialog] = useState<"open" | "close" | "delete" | null>(
+  const [dialog, setDialog] = useState<"open" | "close" | "close-empty" | "delete" | null>(
     null,
   );
   const [detail, setDetail] = useState<{
@@ -120,7 +121,7 @@ export function CashRegisterView() {
     } catch {
       // si falla la query de mesas dejamos pasar
     }
-    setDialog("close");
+    setDialog(summary?.saleCount === 0 ? "close-empty" : "close");
   }
 
   async function close(amount: number) {
@@ -140,11 +141,30 @@ export function CashRegisterView() {
       setBusy(false);
     }
   }
+  async function closeAndDelete() {
+    if (!open) return;
+    setBusy(true);
+    try {
+      const closed = await cashRegisterService.closeSession(open, open.openingAmount);
+      await cashRegisterService.deleteClosedSession(closed.cash, true);
+      notify.success("Caja eliminada sin registrar.");
+      setDialog(null);
+      await refresh();
+    } catch (error) {
+      notify.error(
+        "No fue posible eliminar la caja.",
+        error instanceof Error ? error.message : undefined,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   async function remove() {
     if (!open || dialog !== "delete") return;
     setBusy(true);
     try {
-      await cashRegisterService.deleteClosedSession(open);
+      const s = await cashRegisterService.summary(open.id);
+      await cashRegisterService.deleteClosedSession(open, s.saleCount === 0);
       setDialog(null);
       await refresh();
       notify.success("Caja eliminada.");
@@ -256,6 +276,15 @@ export function CashRegisterView() {
           busy={busy}
           onClose={() => setDialog(null)}
           onConfirm={close}
+        />
+      ) : null}
+      {dialog === "close-empty" && open ? (
+        <CloseEmptyDialog
+          cash={open}
+          busy={busy}
+          onClose={() => setDialog(null)}
+          onKeep={() => { setDialog("close"); }}
+          onDelete={() => void closeAndDelete()}
         />
       ) : null}
       {dialog === "delete" && open ? (
@@ -433,7 +462,7 @@ function HistoryRow({
           ) : (
             "-"
           )}
-          {canDelete && cash.status === "CLOSED" ? (
+          {cash.status === "CLOSED" && (canDelete || summary?.saleCount === 0) ? (
             <Button
               size="xs"
               variant="outline"
@@ -441,7 +470,7 @@ function HistoryRow({
               onClick={onDelete}
             >
               <Trash2 size={14} />
-              Eliminar
+              {summary?.saleCount === 0 ? "Sin ventas — Eliminar" : "Eliminar"}
             </Button>
           ) : null}
         </Flex>
@@ -689,6 +718,44 @@ function ConfirmDelete({
         <Button colorPalette="red" loading={busy} onClick={onConfirm}>
           <Trash2 size={17} />
           Eliminar
+        </Button>
+      </Flex>
+    </Modal>
+  );
+}
+function CloseEmptyDialog({
+  cash,
+  busy,
+  onClose,
+  onKeep,
+  onDelete,
+}: {
+  cash: CashSession;
+  busy: boolean;
+  onClose: () => void;
+  onKeep: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Modal>
+      <Flex gap="3" align="center">
+        <Box color="orange.500"><AlertTriangle size={24} /></Box>
+        <Heading size="md">Caja #{cash.sessionNumber} sin ventas</Heading>
+      </Flex>
+      <Text mt="4" color="gray.600">
+        Esta caja no tiene ninguna venta registrada. Puedes cerrarla y dejarla
+        en el historial, o eliminarla directamente para que no quede registrada.
+      </Text>
+      <Flex mt="7" justify="end" gap="3" wrap="wrap">
+        <Button variant="outline" disabled={busy} onClick={onClose}>
+          Cancelar
+        </Button>
+        <Button variant="outline" colorPalette="gray" loading={busy} onClick={onKeep}>
+          Cerrar y guardar
+        </Button>
+        <Button colorPalette="red" loading={busy} onClick={onDelete}>
+          <Trash2 size={17} />
+          Eliminar sin registrar
         </Button>
       </Flex>
     </Modal>

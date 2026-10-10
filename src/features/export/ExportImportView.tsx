@@ -91,6 +91,7 @@ function ExportCard({ title, sub, id, label, icon, busy, onExport }: {
 // ExportImportView
 // ---------------------------------------------------------------------------
 export function ExportImportView() {
+  const canSeeUsers = sessionContext.hasPermission("users.view");
   const session = sessionContext.current();
   const isAdmin = session?.user.role === "ADMIN" || session?.user.role === "SUPERADMIN";
 
@@ -194,7 +195,7 @@ export function ExportImportView() {
               busy={busy}
               onExport={() => void handleExport("export-cajas", exportCajas)}
             />
-            {isAdmin && (
+            {canSeeUsers && (
               <ExportCard
                 title="Usuarios"
                 sub="1 hoja: ID, usuario, nombre display, rol y estado activo. Solo administradores."
@@ -208,9 +209,8 @@ export function ExportImportView() {
           </Grid>
         </Panel>
 
-        {/* Seccion 2: Importar desde Excel (solo admin) */}
-        {isAdmin && (
-          <Panel>
+        {/* Seccion 2: Importar desde Excel */}
+        <Panel>
             <SectionHeading
               icon={<Upload size={18} />}
               title="Importar desde Excel"
@@ -256,12 +256,10 @@ export function ExportImportView() {
                 )}
               </Box>
             </Grid>
-          </Panel>
-        )}
+        </Panel>
 
         {/* Seccion 3: Copia de seguridad local (solo admin) */}
-        {isAdmin && (
-          <Panel>
+        {isAdmin && <Panel>
             <SectionHeading
               icon={<Database size={18} />}
               title="Copia de seguridad local"
@@ -307,8 +305,7 @@ export function ExportImportView() {
                 )}
               </Box>
             </Stack>
-          </Panel>
-        )}
+        </Panel>}
 
       </Stack>
     </Box>

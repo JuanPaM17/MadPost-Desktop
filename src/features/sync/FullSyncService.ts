@@ -119,15 +119,24 @@ class FullSyncService {
 // Columns that are NOT NULL in Supabase but nullable in local SQLite — coerce null to a safe default.
 const COERCE_NULL: Record<string, string | number | boolean> = {
   delivery_price: 0,
+  max_sauces: 0,
+  stock: 0,
+  quantity_per_sale: 1,
+  low_stock_threshold: 0,
 };
+
+// Numeric columns that may arrive as empty string "" from imports — coerce to null.
+const NUMERIC_COLUMNS = new Set(["stock", "price", "low_stock_threshold", "quantity_per_sale", "delivery_price", "max_sauces"]);
 
 function toRemoteRow(row: Record<string, unknown>, specifications: readonly ColumnSpec[]) {
   return Object.fromEntries(specifications.map(({ name, boolean }) => {
-    const raw = row[name];
+    let raw = row[name];
     if (boolean) {
       // SQLite stores booleans as INTEGER 0/1; null means false (safer than rejecting)
       return [name, raw !== null && raw !== undefined ? Number(raw) !== 0 : false];
     }
+    // Coerce empty string to null for numeric columns (can happen after Excel import)
+    if (NUMERIC_COLUMNS.has(name) && raw === "") raw = null;
     if (raw === null || raw === undefined) {
       return [name, name in COERCE_NULL ? COERCE_NULL[name] : null];
     }

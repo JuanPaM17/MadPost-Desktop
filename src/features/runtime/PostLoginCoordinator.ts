@@ -8,6 +8,7 @@ import { mobileDevicesService } from "../api/MobileDevicesService";
 import { posService } from "../pos/PosService";
 import { businessConfigService, printerService } from "../config/BusinessConfigService";
 import { appCache } from "../../infrastructure/AppCache";
+import { rolesService } from "../roles/RolesService";
 
 export type RuntimeContext = {
   tenantId: string;
@@ -74,6 +75,9 @@ class PostLoginCoordinator {
       try { await service.start(context); } catch (error) { runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar un servicio.", error); }
     }
     void this.warmupCache();
+    void rolesService.ensureSystemRoles(context.tenantId).catch((error) =>
+      runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar roles del sistema.", error),
+    );
     runtimeLogger.info("PostLoginCoordinator", "Inicializacion posterior al login completada.", { tenantId: context.tenantId });
   }
 

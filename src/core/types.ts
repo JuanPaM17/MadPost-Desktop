@@ -1,4 +1,4 @@
-export type UserRole = "ADMIN" | "SELLER" | "SUPERADMIN";
+export type UserRole = "ADMIN" | "SELLER" | "SUPERADMIN" | string;
 
 export type Tenant = {
   id: string;

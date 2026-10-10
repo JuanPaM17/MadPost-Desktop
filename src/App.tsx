@@ -12,6 +12,7 @@ import { licenseService } from "./features/license/LicenseService";
 import { MainView } from "./features/main/MainView";
 import { postLoginCoordinator } from "./features/runtime/PostLoginCoordinator";
 import { configService } from "./features/setup/ConfigService";
+import { rolesService } from "./features/roles/RolesService";
 import { UpdateDialog } from "./features/update/UpdateDialog";
 import { updateService, type UpdateInfo } from "./features/update/UpdateService";
 import { sessionContext } from "./core/session/SessionContext";
@@ -20,7 +21,7 @@ type Screen = "loading" | "migrating" | "license" | "login" | "recovery" | "setu
 
 function App() {
   const [screen, setScreen] = useState<Screen>("loading");
-  const [tenant, setTenant] = useState({ id: "", name: "" });
+  const [tenant, setTenant] = useState({ id: "", name: "", address: "", phone: "", taxId: "" });
   const [user, setUser] = useState<LocalUser | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
@@ -49,17 +50,25 @@ function App() {
       window.location.reload();
       return;
     }
-    const result = await startApplication(() => { setTenant({ id: "", name: "" }); setOnline(false); setScreen("license"); });
+    const result = await startApplication(() => { setTenant({ id: "", name: "", address: "", phone: "", taxId: "" }); setOnline(false); setScreen("license"); });
     if (result.screen === "license") { setOnline(result.online); setScreen("license"); return; }
-    setTenant({ id: result.tenantId, name: result.tenantName });
+    const hasAdmin = await authService.hasAdminUser(result.tenantId);
+    let address = result.address ?? ""; let phone = result.phone ?? ""; let taxId = result.taxId ?? "";
+    if (!hasAdmin) {
+      const remote = await licenseService.fetchRemoteTenantData(result.tenantId);
+      if (remote.address) address = remote.address;
+      if (remote.phone) phone = remote.phone;
+      if (remote.taxId) taxId = remote.taxId;
+    }
+    setTenant({ id: result.tenantId, name: result.tenantName, address, phone, taxId });
     const update = await updateService.checkForUpdate();
     if (update) await new Promise<void>((resolve) => { updateDecision.current = resolve; setPendingUpdate(update); });
-    setScreen((await authService.hasAdminUser(result.tenantId)) ? "login" : "setup");
+    setScreen(hasAdmin ? "login" : "setup");
   }
 
   async function activate(key: string) {
     const result = await licenseService.activate(key);
-    setTenant({ id: result.tenantId, name: result.tenantName });
+    setTenant({ id: result.tenantId, name: result.tenantName, address: result.address ?? "", phone: result.phone ?? "", taxId: result.taxId ?? "" });
     setScreen((await authService.hasAdminUser(result.tenantId)) ? "login" : "setup");
   }
 
@@ -78,7 +87,8 @@ function App() {
   }
 
   async function showMain(authenticatedUser: LocalUser) {
-    sessionContext.login(authenticatedUser, tenant.name);
+    const permissions = await rolesService.loadUserPermissions(authenticatedUser.tenant_id, authenticatedUser.role);
+    sessionContext.login(authenticatedUser, tenant.name, permissions);
     const cachedLicense = await licenseService.hasValidCachedLicense();
     await postLoginCoordinator.start({
       tenantId: tenant.id,
@@ -94,8 +104,8 @@ function App() {
     : screen === "license" ? <LicenseView online={online} onActivate={activate} onRetry={async () => setOnline(await licenseService.isReachable())} />
     : screen === "login" ? <LoginView tenantName={tenant.name} onLogin={async (username, password) => { await showMain(await authService.login(tenant.id, username, password)); }} onRecovery={() => setScreen("recovery")} />
     : screen === "recovery" ? <RecoveryView onRecover={recover} onBack={() => setScreen("login")} />
-    : screen === "setup" ? <SetupView tenantName={tenant.name} onFinish={finishSetup} />
-    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name); setUser(updatedUser); }} onLogout={() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }} />;
+    : screen === "setup" ? <SetupView tenantName={tenant.name} initialAddress={tenant.address} initialPhone={tenant.phone} initialTaxId={tenant.taxId} onFinish={finishSetup} />
+    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }} />;
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}

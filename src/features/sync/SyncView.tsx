@@ -5,6 +5,7 @@ import { notify } from "../../components/ui/AppToaster";
 import { sessionContext } from "../../core/session/SessionContext";
 import { connectivityMonitor } from "./ConnectivityMonitor";
 import { fullSyncService, type TableSyncProgress } from "./FullSyncService";
+import { supabaseConnection } from "../../infrastructure/supabase/SupabaseClient";
 
 // ---------------------------------------------------------------------------
 // Store singleton — survives component unmount/remount
@@ -87,6 +88,7 @@ async function runSync() {
   setStore({ phase: "running", rows: initialRows, doneCount: 0, totalCount: tables.length, totalElapsed: null });
   startTimer();
 
+  const startedAt = new Date().toISOString();
   const result = await fullSyncService.resetAndSync(tenantId, (progress) => {
     const current = store.rows;
     const index = current.findIndex((r) => r.tableName === progress.tableName);
@@ -98,6 +100,7 @@ async function runSync() {
   });
 
   const secs = stopTimer();
+  const finishedAt = new Date().toISOString();
   const dateStr = new Intl.DateTimeFormat("es-CO", {
     day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
   }).format(new Date());
@@ -107,6 +110,44 @@ async function runSync() {
     lastSync: `${dateStr}  --  Duracion: ${formatElapsed(secs)}`,
     doneCount: result.completedTables,
   });
+
+  // Registrar en sync_commands igual que el poller
+  try {
+    const elapsed = `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+    const resultSummary = result.ok
+      ? `${result.completedTables}/${fullSyncService.tables.length} tablas OK - ${elapsed}`
+      : `Error en sync - ${result.completedTables}/${fullSyncService.tables.length} tablas OK`;
+    const finalByTable = new Map<string, TableSyncProgress>();
+    for (const entry of result.progress) finalByTable.set(entry.tableName, entry);
+    const syncLog = Array.from(finalByTable.values()).map((entry) => ({
+      table: entry.tableName,
+      status: entry.status.toLowerCase(),
+      records: entry.totalRecords,
+      ...(entry.error ? { error: entry.error } : {}),
+      log: entry.logLines.map((line) => {
+        const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/.exec(line);
+        if (!match) return line;
+        const d = new Date(match[1]);
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mm = String(d.getMinutes()).padStart(2, "0");
+        const ss = String(d.getSeconds()).padStart(2, "0");
+        return `${hh}:${mm}:${ss} \u2014 ${line.replace(/^\S+ - /, "")}`;
+      }),
+    }));
+    await supabaseConnection.getClient().from("sync_commands").insert({
+      tenant_id: tenantId,
+      status: result.ok ? "done" : "error",
+      requested_by: "desktop",
+      started_at: startedAt,
+      finished_at: finishedAt,
+      duration_secs: secs,
+      result_summary: resultSummary,
+      sync_log_json: JSON.stringify(syncLog),
+      backup_ok: false,
+    });
+  } catch {
+    // No bloquear la UI si falla el registro del comando
+  }
 }
 
 // ---------------------------------------------------------------------------

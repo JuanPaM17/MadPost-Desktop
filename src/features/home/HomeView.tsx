@@ -1,5 +1,5 @@
 import { Box, Button, Flex, Grid, Heading, Spinner, Text } from "@chakra-ui/react";
-import { AlertTriangle, Package, Pencil, ShoppingCart, Table2, TrendingUp, WalletCards, X, Check } from "lucide-react";
+import { AlertTriangle, History, Package, Pencil, ShoppingCart, Table2, TrendingUp, WalletCards, X, Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { sessionContext } from "../../core/session/SessionContext";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
@@ -90,12 +90,16 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
 
   const userName = session?.user.display_name || session?.user.username || "";
 
-  // Opciones configurables: excluye las hardcodeadas como acceso directo y filtra por rol
+  // IDs hardcodeados como accesos rapidos fijos
+  const HARDCODED_IDS = ["pos", "tables", "cash", "history", "products", "inventory"];
+
+  // Opciones configurables: excluye los hardcodeados y filtra por permiso
   const availableOptions = MENU_ITEMS.filter((item) => {
-    if (item.homeOnly) return false;
+    if (HARDCODED_IDS.includes(item.id)) return false;
     if (item.id === "home") return false;
-    if (item.superAdminOrDev) return isSuperAdminOrDev;
-    if (item.adminOnly) return isAdmin;
+    if (item.superAdminOrDev && !isSuperAdminOrDev) return false;
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.permission && !sessionContext.hasPermission(item.permission)) return false;
     return true;
   });
 
@@ -122,7 +126,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               title="Caja"
               value={data?.cash ? `Caja #${data.cash.sessionNumber}` : "Cerrada"}
               subtitle={data?.cash ? `Abierta por ${data.cash.userName ?? ""}` : "No hay caja abierta"}
-              action="Ir a Caja"
+              action={sessionContext.hasPermission("cash.view") ? "Ir a Caja" : undefined}
               onAction={() => onNavigate("cash")}
             />
             {data?.cash ? (
@@ -132,7 +136,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
                 title="Ventas"
                 value={`${data.todaySales} ventas`}
                 subtitle={money(data.todayTotal)}
-                action="Ver Historial"
+                action={sessionContext.hasPermission("history.view") ? "Ver Historial" : undefined}
                 onAction={() => onNavigate("history")}
               />
             ) : null}
@@ -142,7 +146,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               title="Productos"
               value={`${data?.activeProducts ?? 0} activos`}
               subtitle="Productos disponibles para venta"
-              action="Ver Productos"
+              action={sessionContext.hasPermission("products.view") ? "Ver Productos" : undefined}
               onAction={() => onNavigate("products")}
             />
             <StatCard
@@ -151,7 +155,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               title="Mesas"
               value={`${data?.activeTables ?? 0} mesas`}
               subtitle={data?.openOrders ? `${data.openOrders} con orden abierta` : "Sin ordenes activas"}
-              action="Ver Mesas"
+              action={sessionContext.hasPermission("tables.use") ? "Ver Mesas" : undefined}
               onAction={() => onNavigate("tables")}
             />
             <StatCard
@@ -160,33 +164,46 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               title="Stock bajo"
               value={data?.lowStockCount ? `${data.lowStockCount} insumos` : "Todo en orden"}
               subtitle={data?.lowStockCount ? "Requieren reabastecimiento" : "Sin alertas de inventario"}
-              action="Ver Inventario"
+              action={sessionContext.hasPermission("inventory.view") ? "Ver Inventario" : undefined}
               onAction={() => onNavigate("inventory")}
             />
           </Grid>
 
           {/* Accesos rapidos */}
-          <Flex align="center" justify="space-between" mb="3">
-            <Text fontWeight="semibold" color="gray.600" fontSize="sm">ACCESOS RAPIDOS</Text>
-            <Button size="xs" variant="ghost" colorPalette="gray" onClick={() => setEditOpen(true)}>
-              <Pencil size={13} />Editar
-            </Button>
-          </Flex>
-          <Flex gap="3" flexWrap="wrap">
-            {/* Hardcodeados */}
-            <QuickButton icon={<ShoppingCart size={16} />} label="Punto de Venta" onClick={() => onNavigate("pos")} colorPalette="purple" />
-            <QuickButton icon={<WalletCards size={16} />} label="Caja" onClick={() => onNavigate("cash")} colorPalette="green" />
-            <QuickButton icon={<Package size={16} />} label="Productos" onClick={() => onNavigate("products")} colorPalette="blue" />
-            <QuickButton icon={<Table2 size={16} />} label="Mesas" onClick={() => onNavigate("tables")} colorPalette="teal" />
-            <QuickButton icon={<AlertTriangle size={16} />} label="Inventario" onClick={() => onNavigate("inventory")} colorPalette="orange" />
-            {/* Extras configurados por el usuario */}
-            {extraLinks.map((id) => {
+          {(() => {
+            const hardcoded = [
+              sessionContext.hasPermission("pos.use")      ? <QuickButton key="pos"       icon={<ShoppingCart size={16} />} label="Punto de Venta" onClick={() => onNavigate("pos")}       colorPalette="purple" /> : null,
+              sessionContext.hasPermission("cash.view")    ? <QuickButton key="cash"      icon={<WalletCards  size={16} />} label="Caja"           onClick={() => onNavigate("cash")}      colorPalette="green"  /> : null,
+              sessionContext.hasPermission("products.view")? <QuickButton key="products"  icon={<Package      size={16} />} label="Productos"      onClick={() => onNavigate("products")}  colorPalette="blue"   /> : null,
+              sessionContext.hasPermission("tables.use")   ? <QuickButton key="tables"    icon={<Table2       size={16} />} label="Mesas"          onClick={() => onNavigate("tables")}    colorPalette="teal"   /> : null,
+              sessionContext.hasPermission("inventory.view")? <QuickButton key="inventory" icon={<AlertTriangle size={16} />} label="Inventario"   onClick={() => onNavigate("inventory")} colorPalette="orange" /> : null,
+              sessionContext.hasPermission("history.view") ? <QuickButton key="history"   icon={<History      size={16} />} label="Historial"      onClick={() => onNavigate("history")}   colorPalette="gray"   /> : null,
+            ].filter(Boolean);
+            const extras = extraLinks.map((id) => {
               const opt = availableOptions.find((o) => o.id === id);
               if (!opt) return null;
               const Icon = opt.icon;
               return <QuickButton key={id} icon={<Icon size={16} />} label={opt.label} onClick={() => onNavigate(id)} colorPalette="gray" />;
-            })}
-          </Flex>
+            }).filter(Boolean);
+            const hasAny = hardcoded.length > 0 || extras.length > 0;
+            return (
+              <>
+                <Flex align="center" justify="space-between" mb="3">
+                  <Text fontWeight="semibold" color="gray.600" fontSize="sm">ACCESOS RAPIDOS</Text>
+                  <Button size="xs" variant="ghost" colorPalette="gray" onClick={() => setEditOpen(true)}>
+                    <Pencil size={13} />Editar
+                  </Button>
+                </Flex>
+                {hasAny ? (
+                  <Flex gap="3" flexWrap="wrap">{hardcoded}{extras}</Flex>
+                ) : (
+                  <Flex align="center" justify="center" py="6" borderWidth="1px" borderColor="gray.200" borderRadius="md" borderStyle="dashed">
+                    <Text color="gray.400" fontSize="sm">Sin accesos rapidos configurados.</Text>
+                  </Flex>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
 
@@ -260,7 +277,7 @@ function EditLinksModal({ options, selected, onClose, onSave }: {
 // Sub-components
 // ---------------------------------------------------------------------------
 function StatCard({ icon, color, title, value, subtitle, action, onAction }: {
-  icon: React.ReactNode; color: string; title: string; value: string; subtitle: string; action: string; onAction: () => void;
+  icon: React.ReactNode; color: string; title: string; value: string; subtitle: string; action?: string; onAction: () => void;
 }) {
   const colors: Record<string, { bg: string; iconBg: string; iconColor: string }> = {
     green:  { bg: "green.50",  iconBg: "green.100",  iconColor: "#16a34a" },
@@ -278,7 +295,7 @@ function StatCard({ icon, color, title, value, subtitle, action, onAction }: {
           <Flex w="28px" h="28px" align="center" justify="center" borderRadius="md" bg={c.iconBg} color={c.iconColor}>{icon}</Flex>
           <Text fontWeight="semibold" color="gray.500" fontSize="xs">{title}</Text>
         </Flex>
-        <Button size="xs" variant="ghost" colorPalette="gray" onClick={onAction}>{action}</Button>
+        {action ? <Button size="xs" variant="ghost" colorPalette="gray" onClick={onAction}>{action}</Button> : null}
       </Flex>
       <Text fontWeight="bold" fontSize="lg" lineHeight="1.2">{value}</Text>
       <Text color="gray.400" fontSize="xs" mt="0.5">{subtitle}</Text>

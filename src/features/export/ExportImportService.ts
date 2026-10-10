@@ -196,6 +196,11 @@ export async function importProductos(): Promise<ImportResult | null> {
     if (!ws) return [];
     return XLSX.utils.sheet_to_json<T>(ws, { defval: null });
   }
+  function numOrNull(value: unknown): number | null {
+    if (value === null || value === undefined || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
 
   // 1. Categorias
   const catRows = sheetRows<{ Nombre?: string; Muestra_Adiciones?: string; Muestra_Salsas?: string }>("Categorias");
@@ -229,17 +234,18 @@ export async function importProductos(): Promise<ImportResult | null> {
     try {
       const catId = row.Categoria ? (catIdByName.get(row.Categoria.toString().toLowerCase()) ?? null) : null;
       const active = row.Activo?.toString().toLowerCase() !== "no" ? 1 : 0;
-      const stock = row["Stock Directo"] ?? null;
+      const stock = numOrNull(row["Stock Directo"]);
+      const price = numOrNull(row.Precio) ?? 0;
       const existing = await db.select<{ id: string }[]>("SELECT id FROM products WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
       if (existing[0]) {
         await db.execute("UPDATE products SET category_id=$1,price=$2,stock=$3,active=$4,description=$5,updated_at=$6 WHERE id=$7",
-          [catId, Number(row.Precio ?? 0), stock, active, row.Descripcion || null, now, existing[0].id]);
+          [catId, price, stock, active, row.Descripcion || null, now, existing[0].id]);
         prodIdByName.set(name.toLowerCase(), existing[0].id);
         updated++;
       } else {
         const id = crypto.randomUUID();
         await db.execute("INSERT INTO products(id,tenant_id,name,category_id,price,stock,active,description,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)",
-          [id, tid, name, catId, Number(row.Precio ?? 0), stock, active, row.Descripcion || null, now]);
+          [id, tid, name, catId, price, stock, active, row.Descripcion || null, now]);
         prodIdByName.set(name.toLowerCase(), id);
         created++;
       }
@@ -253,13 +259,14 @@ export async function importProductos(): Promise<ImportResult | null> {
     if (!name) continue;
     try {
       const active = row.Activo?.toString().toLowerCase() !== "no" ? 1 : 0;
-      const stock = row["Stock Directo"] ?? null;
+      const stock = numOrNull(row["Stock Directo"]);
+      const price = numOrNull(row.Precio) ?? 0;
       const existing = await db.select<{ id: string }[]>("SELECT id FROM additions WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
       if (existing[0]) {
-        await db.execute("UPDATE additions SET price=$1,stock=$2,active=$3,updated_at=$4 WHERE id=$5", [Number(row.Precio ?? 0), stock, active, now, existing[0].id]);
+        await db.execute("UPDATE additions SET price=$1,stock=$2,active=$3,updated_at=$4 WHERE id=$5", [price, stock, active, now, existing[0].id]);
         updated++;
       } else {
-        await db.execute("INSERT INTO additions(id,tenant_id,name,price,stock,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [crypto.randomUUID(), tid, name, Number(row.Precio ?? 0), stock, active, now]);
+        await db.execute("INSERT INTO additions(id,tenant_id,name,price,stock,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [crypto.randomUUID(), tid, name, price, stock, active, now]);
         created++;
       }
     } catch (e) { errors.push(`Adicion '${name}': ${String(e)}`); }
@@ -273,13 +280,15 @@ export async function importProductos(): Promise<ImportResult | null> {
     if (!name) continue;
     try {
       const existing = await db.select<{ id: string }[]>("SELECT id FROM supplies WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)", [tid, name]);
+      const stockActual = numOrNull(row.Stock_Actual);
+      const umbral = numOrNull(row.Umbral_Alerta);
       if (existing[0]) {
-        await db.execute("UPDATE supplies SET unit=$1,stock=$2,low_stock_threshold=$3,updated_at=$4 WHERE id=$5", [row.Unidad || null, row.Stock_Actual ?? null, row.Umbral_Alerta ?? null, now, existing[0].id]);
+        await db.execute("UPDATE supplies SET unit=$1,stock=$2,low_stock_threshold=$3,updated_at=$4 WHERE id=$5", [row.Unidad || null, stockActual, umbral, now, existing[0].id]);
         insIdByName.set(name.toLowerCase(), existing[0].id);
         updated++;
       } else {
         const id = crypto.randomUUID();
-        await db.execute("INSERT INTO supplies(id,tenant_id,name,unit,stock,low_stock_threshold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [id, tid, name, row.Unidad || null, row.Stock_Actual ?? null, row.Umbral_Alerta ?? null, now]);
+        await db.execute("INSERT INTO supplies(id,tenant_id,name,unit,stock,low_stock_threshold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)", [id, tid, name, row.Unidad || null, stockActual, umbral, now]);
         insIdByName.set(name.toLowerCase(), id);
         created++;
       }
@@ -296,12 +305,12 @@ export async function importProductos(): Promise<ImportResult | null> {
       const prodId = prodIdByName.get(prodName.toLowerCase());
       const insId = insIdByName.get(insName.toLowerCase());
       if (!prodId || !insId) { errors.push(`Insumo_Producto '${prodName}/${insName}': producto o insumo no encontrado`); continue; }
-      const existing = await db.select<{ id: string }[]>("SELECT id FROM product_supplies WHERE product_id=$1 AND supply_id=$2", [prodId, insId]);
+      const existing = await db.select<{ product_id: string }[]>("SELECT product_id FROM product_supplies WHERE product_id=$1 AND supply_id=$2", [prodId, insId]);
       if (existing[0]) {
-        await db.execute("UPDATE product_supplies SET quantity_per_sale=$1 WHERE id=$2", [Number(row.Cantidad_Por_Venta ?? 1), existing[0].id]);
+        await db.execute("UPDATE product_supplies SET quantity_per_sale=$1 WHERE product_id=$2 AND supply_id=$3", [numOrNull(row.Cantidad_Por_Venta) ?? 1, prodId, insId]);
         updated++;
       } else {
-        await db.execute("INSERT INTO product_supplies(id,product_id,supply_id,quantity_per_sale) VALUES($1,$2,$3,$4)", [crypto.randomUUID(), prodId, insId, Number(row.Cantidad_Por_Venta ?? 1)]);
+        await db.execute("INSERT INTO product_supplies(product_id,supply_id,quantity_per_sale) VALUES($1,$2,$3)", [prodId, insId, numOrNull(row.Cantidad_Por_Venta) ?? 1]);
         created++;
       }
     } catch (e) { errors.push(`Insumo_Producto '${prodName}/${insName}': ${String(e)}`); }

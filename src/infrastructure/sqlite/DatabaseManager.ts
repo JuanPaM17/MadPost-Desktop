@@ -186,6 +186,19 @@ const migrations = [
     sort_order INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, view_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS roles (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
+    created_at TEXT NOT NULL,
+    UNIQUE (tenant_id, name)
+  )`,
+  `CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission_code TEXT NOT NULL,
+    PRIMARY KEY (role_id, permission_code)
+  )`,
   "CREATE INDEX IF NOT EXISTS idx_users_tenant_role ON users(tenant_id, role, active)",
   "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, retry_count, id)",
   "CREATE INDEX IF NOT EXISTS idx_pending_deletes_status ON pending_deletes(status, id)",
@@ -262,6 +275,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "table_order_items", "updated_at", "TEXT");
     await this.ensureColumn(database, "tenants", "react_migrated", "INTEGER NOT NULL DEFAULT 0");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
+    await this.dropRoleCheckConstraint(database);
     return database;
   }
 
@@ -287,6 +301,32 @@ class DatabaseManager {
         CASE WHEN status = 'SYNCED' THEN synced_at ELSE NULL END, 0
       FROM sync_queue_legacy`);
     await database.execute("DROP TABLE sync_queue_legacy");
+  }
+
+  /** Elimina el CHECK constraint de role en users si todavia existe (migracion unica). */
+  private async dropRoleCheckConstraint(database: SqliteDatabase) {
+    const rows = await database.select<{ sql: string }[]>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'",
+    );
+    const tableSql = rows[0]?.sql ?? "";
+    // Si el CHECK ya fue eliminado, no hacer nada
+    if (!tableSql.includes("CHECK (role IN")) return;
+
+    await database.execute("ALTER TABLE users RENAME TO users_old");
+    await database.execute(`CREATE TABLE users (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      username TEXT NOT NULL COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      display_name TEXT,
+      role TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, username)
+    )`);
+    await database.execute("INSERT INTO users SELECT * FROM users_old");
+    await database.execute("DROP TABLE users_old");
   }
 
   private async ensureColumn(database: SqliteDatabase, table: string, column: string, definition: string) {

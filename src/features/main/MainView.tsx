@@ -1,7 +1,7 @@
 import { Badge, Box, Button, Flex, Heading, Separator, Stack, Text } from "@chakra-ui/react";
 import { Tip } from "../../components/ui/Tip";
 import type { LucideIcon } from "lucide-react";
-import { CircleHelp, Download, LogOut, PanelLeftClose, PanelLeftOpen, Settings, UserRound } from "lucide-react";
+import { CircleHelp, Download, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { LocalUser } from "../../core/types";
 import { licenseService } from "../license/LicenseService";
@@ -19,16 +19,25 @@ import { PosHeaderBar, PosView } from "../pos/PosView";
 import { TablesHeaderBar, TablesView } from "../tables/TablesView";
 import { HomeView } from "../home/HomeView";
 import { StatisticsView } from "../statistics/StatisticsView";
+import { RolesView } from "../roles/RolesView";
 import { invoke } from "@tauri-apps/api/core";
 import { appConfig } from "../../config/AppConfig";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
 import { MENU_ITEMS } from "./menuConfig";
+import { sessionContext } from "../../core/session/SessionContext";
 
 type MenuItem = { id: string; label: string; icon: LucideIcon };
 
-const operations: MenuItem[] = MENU_ITEMS.filter((m) => ["home", "pos", "tables", "cash", "history"].includes(m.id));
-const catalog: MenuItem[] = MENU_ITEMS.filter((m) => ["products", "inventory"].includes(m.id));
-const administration: MenuItem[] = MENU_ITEMS.filter((m) => ["statistics", "audit", "users"].includes(m.id));
+const ALL_OPERATIONS = MENU_ITEMS.filter((m) => ["pos", "tables", "cash", "history"].includes(m.id));
+const ALL_CATALOG = MENU_ITEMS.filter((m) => ["products", "inventory"].includes(m.id));
+const ALL_ADMINISTRATION = MENU_ITEMS.filter((m) => ["statistics", "audit", "users", "roles"].includes(m.id));
+
+function canSee(item: (typeof MENU_ITEMS)[number], admin: boolean, developer: boolean): boolean {
+  if (item.superAdminOrDev && !developer) return false;
+  if (item.adminOnly && !admin) return false;
+  if (item.permission && !sessionContext.hasPermission(item.permission)) return false;
+  return true;
+}
 
 export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: LocalUser; tenantName: string; onLogout: () => void; onUserUpdated: (user: LocalUser) => void }) {
   const [activeView, setActiveView] = useState("home");
@@ -37,7 +46,14 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const admin = user.role === "ADMIN" || user.role === "SUPERADMIN";
   const developer = user.role === "SUPERADMIN" || import.meta.env.DEV;
-  const selectedTitle = useMemo(() => allItems(admin, developer).find((item) => item.id === activeView)?.label ?? "Punto de Venta", [activeView, admin, developer]);
+  const operations = useMemo(() => ALL_OPERATIONS.filter((m) => canSee(m, admin, developer)), [admin, developer]);
+  const catalog = useMemo(() => ALL_CATALOG.filter((m) => canSee(m, admin, developer)), [admin, developer]);
+  const administration = useMemo(() => ALL_ADMINISTRATION.filter((m) => canSee(m, admin, developer)), [admin, developer]);
+  const settingsVisible = canSee(MENU_ITEMS.find((m) => m.id === "settings")!, admin, developer);
+  const selectedTitle = useMemo(() => {
+    const all = [...operations, ...catalog, ...administration, { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }];
+    return all.find((item) => item.id === activeView)?.label ?? "Punto de Venta";
+  }, [activeView, operations, catalog, administration]);
 
   useEffect(() => { void licenseService.hasValidCachedLicense().then((license) => setExpiresAt(license?.expires_at ?? null)); }, []);
   function openHelp() { void invoke("open_help_url", { url: appConfig.helpUrl() }).catch((error) => runtimeLogger.error("CentroDeAyuda", "No fue posible abrir el navegador.", error)); }
@@ -48,13 +64,13 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
       <Box px={sidebarCollapsed ? "3" : "6"} pb="5" display={sidebarCollapsed ? "none" : "block"}><Text fontWeight="semibold" fontSize="sm">{user.display_name || user.username}</Text><Badge mt="1" bg="whiteAlpha.300" color="white" borderRadius="sm">{roleLabel(user.role)}</Badge></Box>
       <LicenseBanner expiresAt={expiresAt} />
       <Box className="sidebar-scroll" flex="1" overflowY="auto" px="3" pb="4"><Separator borderColor="whiteAlpha.300" mb="4" />
-        <MenuSection title="OPERACIONES" items={operations} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} />
-        <Separator borderColor="whiteAlpha.300" my="4" />
-        <MenuSection title="CATALOGO" items={catalog} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} />
-        {(() => { const adminItems = admin ? administration : administration.filter((m) => !MENU_ITEMS.find((mi) => mi.id === m.id)?.adminOnly); return adminItems.length > 0 ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="ADMINISTRACION" items={adminItems} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null; })()}
+        <MenuButton item={{ id: "home", label: "Inicio", icon: LayoutDashboard }} active={activeView === "home"} onClick={() => setActiveView("home")} collapsed={sidebarCollapsed} />
+        {operations.length > 0 ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="OPERACIONES" items={operations} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
+        {catalog.length > 0 ? <><MenuSection title="CATALOGO" items={catalog} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
+        {administration.length > 0 ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="ADMINISTRACION" items={administration} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
         {developer ? <><Separator borderColor="whiteAlpha.300" my="4" /><MenuSection title="DEVELOPER" items={MENU_ITEMS.filter((m) => m.id === "sql-editor")} activeView={activeView} onSelect={setActiveView} collapsed={sidebarCollapsed} /></> : null}
         <Separator borderColor="whiteAlpha.300" my="4" />
-        <MenuButton item={{ id: "settings", label: "Configuracion", icon: Settings }} active={activeView === "settings"} onClick={() => setActiveView("settings")} collapsed={sidebarCollapsed} />
+        {settingsVisible ? <MenuButton item={{ id: "settings", label: "Configuracion", icon: Settings }} active={activeView === "settings"} onClick={() => setActiveView("settings")} collapsed={sidebarCollapsed} /> : null}
         <MenuButton item={{ id: "updates", label: "Actualizaciones", icon: Download }} active={activeView === "updates"} onClick={() => setActiveView("updates")} collapsed={sidebarCollapsed} />
       </Box>
       <Box px="3" pb="4"><Separator borderColor="whiteAlpha.300" mb="3" />
@@ -63,7 +79,7 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated }: { user: 
         {sidebarCollapsed ? <Tip text="Cerrar Sesion"><Button w="full" justifyContent="center" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} /></Button></Tip> : <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} />Cerrar Sesion</Button>}
       </Box>
     </Flex>
-    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} active={activeView === "pos"} /> : activeView === "tables" ? <TablesHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" || activeView === "tables" ? "hidden" : "auto"} p={activeView === "pos" || activeView === "tables" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView active={activeView === "pos"} /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} /> : activeView === "tables" ? <TablesView onNavigate={(view, param) => { setHistoryInvoice(param); setActiveView(view); }} /> : activeView === "history" ? <HistoryView initialInvoice={historyInvoice} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "statistics" ? <StatisticsView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
+    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} active={activeView === "pos"} /> : activeView === "tables" ? <TablesHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" || activeView === "tables" ? "hidden" : "auto"} p={activeView === "pos" || activeView === "tables" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView active={activeView === "pos"} /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} /> : activeView === "roles" ? <RolesView /> : activeView === "tables" ? <TablesView onNavigate={(view, param) => { setHistoryInvoice(param); setActiveView(view); }} /> : activeView === "history" ? <HistoryView initialInvoice={historyInvoice} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "statistics" ? <StatisticsView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
   </Flex>;
 }
 
@@ -87,5 +103,4 @@ function LicenseBanner({ expiresAt }: { expiresAt: string | null }) {
   return <Box mx="3" mb="3" p="3" bg={color} borderRadius="sm"><Text fontSize="xs" lineHeight="short">{text}</Text></Box>;
 }
 
-function roleLabel(role: LocalUser["role"]) { return role === "SUPERADMIN" ? "Super Admin" : role === "ADMIN" ? "Administrador" : "Vendedor"; }
-function allItems(admin: boolean, developer: boolean) { return [...operations, ...catalog, ...(admin ? administration : administration.filter((m) => !MENU_ITEMS.find((mi) => mi.id === m.id)?.adminOnly)), ...(developer ? MENU_ITEMS.filter((m) => m.id === "sql-editor") : []), { id: "settings", label: "Configuracion", icon: Settings }, { id: "updates", label: "Actualizaciones", icon: Download }, { id: "help", label: "Centro de Ayuda", icon: CircleHelp }, { id: "profile", label: "Mi Perfil", icon: UserRound }]; }
+function roleLabel(role: LocalUser["role"]) { return role === "SUPERADMIN" ? "Super Admin" : role === "ADMIN" ? "Administrador" : role === "SELLER" ? "Vendedor" : role; }

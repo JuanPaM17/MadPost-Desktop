@@ -4,7 +4,7 @@ import { licenseRepository, tenantRepository } from "../../infrastructure/sqlite
 import { supabaseConnection } from "../../infrastructure/supabase/SupabaseClient";
 import { ensureSuperAdmin } from "../auth/AuthService";
 
-type RemoteTenant = { name?: string; slug?: string } | Array<{ name?: string; slug?: string }> | null;
+type RemoteTenant = { name?: string; slug?: string; address?: string | null; phone?: string | null; tax_id?: string | null } | Array<{ name?: string; slug?: string; address?: string | null; phone?: string | null; tax_id?: string | null }> | null;
 type RemoteLicense = {
   key: string;
   tenant_id: string;
@@ -15,12 +15,21 @@ type RemoteLicense = {
 };
 type RemoteDevice = { id: string; device_id: string; hostname: string; active: boolean };
 
-export type LicenseActivation = { tenantId: string; tenantName: string };
+export type LicenseActivation = { tenantId: string; tenantName: string; address: string | null; phone: string | null; taxId: string | null };
 export type Revalidation = "valid" | "offline" | "invalid";
 
 class LicenseService {
   async hasValidCachedLicense() {
     return licenseRepository.getValid();
+  }
+
+  async fetchRemoteTenantData(tenantId: string): Promise<{ address: string | null; phone: string | null; taxId: string | null }> {
+    try {
+      const { data } = await supabaseConnection.getClient().from("tenants").select("address, phone, tax_id").eq("id", tenantId).maybeSingle<{ address: string | null; phone: string | null; tax_id: string | null }>();
+      return { address: data?.address ?? null, phone: data?.phone ?? null, taxId: data?.tax_id ?? null };
+    } catch {
+      return { address: null, phone: null, taxId: null };
+    }
   }
 
   async isReachable() {
@@ -43,7 +52,7 @@ class LicenseService {
     const tenant = this.toTenant(remote);
     await this.cache(remote, tenant, deviceId);
     await ensureSuperAdmin(remote.tenant_id);
-    return { tenantId: remote.tenant_id, tenantName: tenant.name };
+    return { tenantId: remote.tenant_id, tenantName: tenant.name, address: tenant.address, phone: tenant.phone, taxId: tenant.tax_id };
   }
 
   async revalidateInBackground(cached: CachedLicense): Promise<Revalidation> {
@@ -67,7 +76,7 @@ class LicenseService {
     const { data, error } = await supabaseConnection
       .getClient()
       .from("licenses")
-      .select("key, tenant_id, expires_at, sync_enabled, max_devices, tenants(name, slug)")
+      .select("key, tenant_id, expires_at, sync_enabled, max_devices, tenants(name, slug, address, phone, tax_id)")
       .eq("key", key)
       .eq("active", true)
       .maybeSingle<RemoteLicense>();
@@ -131,7 +140,7 @@ class LicenseService {
 
   private toTenant(license: RemoteLicense): Tenant {
     const remoteTenant = Array.isArray(license.tenants) ? license.tenants[0] : license.tenants;
-    return { id: license.tenant_id, name: remoteTenant?.name ?? "Mi negocio", slug: remoteTenant?.slug ?? null, address: null, phone: null, tax_id: null };
+    return { id: license.tenant_id, name: remoteTenant?.name ?? "Mi negocio", slug: remoteTenant?.slug ?? null, address: remoteTenant?.address ?? null, phone: remoteTenant?.phone ?? null, tax_id: remoteTenant?.tax_id ?? null };
   }
 
   private async cache(license: RemoteLicense, tenant: Tenant, deviceId: string) {

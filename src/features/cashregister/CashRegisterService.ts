@@ -219,9 +219,9 @@ class CashRegisterService {
         "La caja se guardo localmente, pero la sincronizacion no esta habilitada en esta sesion.",
       );
   }
-  async deleteClosedSession(cash: CashSession) {
+  async deleteClosedSession(cash: CashSession, skipRoleCheck = false) {
     const session = this.session();
-    if (session.user.role !== "SUPERADMIN")
+    if (!skipRoleCheck && session.user.role !== "SUPERADMIN")
       throw new Error("Solo un superadministrador puede eliminar una caja.");
     if (cash.status !== "CLOSED")
       throw new Error("Solo se pueden eliminar cajas cerradas.");
