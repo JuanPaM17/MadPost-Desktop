@@ -153,6 +153,20 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.3.0 — Roles y permisos, cambio rapido de usuario y exportacion ampliada
+
+**Nuevo:**
+- Sistema de roles y permisos personalizados: asigna permisos individuales a cada usuario desde la pantalla Roles y Permisos.
+- Cambiar de usuario rapidamente desde el menu lateral sin cerrar la sesion actual.
+
+**Mejorado:**
+- Exportacion del catalogo ampliada: ahora incluye tipos de domicilio, descuentos y mesas.
+- Importacion del catalogo actualizada con el mismo formato ampliado.
+- Al importar, los cambios son visibles de inmediato sin necesidad de reiniciar la app.
+- Separador visual entre secciones del menu lateral.
+
+---
+
 ### v1.2.0 — Sincronizacion automatica con datos anteriores
 
 **Mejorado:**
