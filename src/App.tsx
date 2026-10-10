@@ -61,8 +61,6 @@ function App() {
       if (remote.taxId) taxId = remote.taxId;
     }
     setTenant({ id: result.tenantId, name: result.tenantName, address, phone, taxId });
-    const update = await updateService.checkForUpdate();
-    if (update) await new Promise<void>((resolve) => { updateDecision.current = resolve; setPendingUpdate(update); });
     setScreen(hasAdmin ? "login" : "setup");
   }
 
@@ -97,6 +95,8 @@ function App() {
     });
     setUser(authenticatedUser);
     setScreen("main");
+    const update = await updateService.checkForUpdate();
+    if (update) setPendingUpdate(update);
   }
 
   const content = screen === "loading" ? <LoadingView />
