@@ -123,9 +123,9 @@ function AuditFiltersDialog({ actions, entityTypes, users, initial, onClose, onA
       <Box display="grid" gridTemplateColumns={{ base: "1fr", md: "1fr 1fr" }} gap="5">
         <Field label="Desde"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
         <Field label="Hasta"><Input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></Field>
-        <Field label="Accion"><ScrollableSelect placement="top" value={action} options={[{ value: "ALL", label: "Todas" }, ...actions.map((a) => ({ value: a, label: a }))]} onValueChange={setAction} /></Field>
-        <Field label="Tipo"><ScrollableSelect placement="top" value={entityType} options={[{ value: "ALL", label: "Todos" }, ...entityTypes.map((t) => ({ value: t, label: t }))]} onValueChange={setEntityType} /></Field>
-        {users.length > 0 ? <Field label="Usuario"><ScrollableSelect placement="top" value={userName} options={[{ value: "ALL", label: "Todos" }, ...users.map((u) => ({ value: u, label: u }))]} onValueChange={setUserName} /></Field> : null}
+        <Field label="Accion"><ScrollableSelect placement="top" placeholder="Todas" value={action} options={[{ value: "ALL", label: "Todas" }, ...actions.map((a) => ({ value: a, label: a }))]} onValueChange={setAction} /></Field>
+        <Field label="Tipo"><ScrollableSelect placement="top" placeholder="Todos" value={entityType} options={[{ value: "ALL", label: "Todos" }, ...entityTypes.map((t) => ({ value: t, label: t }))]} onValueChange={setEntityType} /></Field>
+        {users.length > 0 ? <Field label="Usuario"><ScrollableSelect placement="top" placeholder="Todos" value={userName} options={[{ value: "ALL", label: "Todos" }, ...users.map((u) => ({ value: u, label: u }))]} onValueChange={setUserName} /></Field> : null}
       </Box>
       {error ? <Text mt="3" color="red.600" fontSize="sm">{error}</Text> : null}
       <Flex justify="space-between" mt="7" gap="3">
