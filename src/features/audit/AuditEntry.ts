@@ -1,3 +1,13 @@
+export type AuditItem = {
+  id: string;
+  sortOrder: number;
+  label: string | null;
+  quantity: number | null;
+  unitPrice: number | null;
+  subtotal: number | null;
+  note: string | null;
+};
+
 export type AuditEntry = {
   id: string;
   userName: string | null;
@@ -6,6 +16,7 @@ export type AuditEntry = {
   entityId: string | null;
   details: string | null;
   createdAt: string;
+  items?: AuditItem[];
 };
 
 export const AUDIT_ACTIONS = [

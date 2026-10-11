@@ -153,6 +153,18 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.4.0 — Auditoria completa y mejoras de usuarios
+
+**Nuevo:**
+- Registro de auditoria ampliado: inicio y cierre de sesion, cambio de usuario, cobros y cancelaciones de mesa, ventas del punto de venta y cambios en configuracion del negocio.
+- Las cancelaciones y cobros de mesa ahora muestran en el detalle de auditoria una tabla con cada producto, cantidad, precio unitario y subtotal.
+- El boton de cambiar usuario solo aparece cuando hay otros usuarios disponibles y se actualiza en tiempo real al crear o eliminar usuarios.
+
+**Mejorado:**
+- La pantalla de auditoria tiene buscador, filtros por fecha, usuario, accion y tipo, y un modal de detalle completo por registro.
+
+---
+
 ### v1.3.0 — Roles y permisos, cambio rapido de usuario y exportacion ampliada
 
 **Nuevo:**

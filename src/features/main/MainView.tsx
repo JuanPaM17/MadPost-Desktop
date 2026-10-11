@@ -48,6 +48,8 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated, onSwitchUs
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [switchOpen, setSwitchOpen] = useState(false);
+  const [hasSwitchableUsers, setHasSwitchableUsers] = useState(false);
+  const [usersVersion, setUsersVersion] = useState(0);
   const admin = user.role === "ADMIN" || user.role === "SUPERADMIN";
   const developer = user.role === "SUPERADMIN" || import.meta.env.DEV;
   const operations = useMemo(() => ALL_OPERATIONS.filter((m) => canSee(m, admin, developer)), [admin, developer]);
@@ -60,6 +62,14 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated, onSwitchUs
   }, [activeView, operations, catalog, administration]);
 
   useEffect(() => { void licenseService.hasValidCachedLicense().then((license) => setExpiresAt(license?.expires_at ?? null)); }, []);
+  useEffect(() => {
+    const tenantId = sessionContext.current()?.tenantId;
+    if (!tenantId) return;
+    void authService.listUsers(tenantId).then((list) => {
+      const switchable = list.filter((u) => u.active && u.id !== user.id);
+      setHasSwitchableUsers(switchable.length > 0);
+    });
+  }, [user.id, activeView, usersVersion]);
   function openHelp() { void invoke("open_help_url", { url: appConfig.helpUrl() }).catch((error) => runtimeLogger.error("CentroDeAyuda", "No fue posible abrir el navegador.", error)); }
 
   return <><Flex h="100vh" minW="900px" overflow="hidden" bg="gray.50">
@@ -80,23 +90,23 @@ export function MainView({ user, tenantName, onLogout, onUserUpdated, onSwitchUs
       <Box px="3" pb="4"><Separator borderColor="whiteAlpha.300" mb="3" />
         <MenuButton item={{ id: "help", label: "Centro de Ayuda", icon: CircleHelp }} active={false} onClick={openHelp} collapsed={sidebarCollapsed} />
         <MenuButton item={{ id: "profile", label: "Mi Perfil", icon: UserRound }} active={activeView === "profile"} onClick={() => setActiveView("profile")} collapsed={sidebarCollapsed} />
-        {sidebarCollapsed ? <Tip text="Cambiar usuario"><Button w="full" justifyContent="center" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={() => setSwitchOpen(true)}><ArrowLeftRight size={18} /></Button></Tip> : <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={() => setSwitchOpen(true)}><ArrowLeftRight size={18} />Cambiar usuario</Button>}
+        {hasSwitchableUsers ? (sidebarCollapsed ? <Tip text="Cambiar usuario"><Button w="full" justifyContent="center" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={() => setSwitchOpen(true)}><ArrowLeftRight size={18} /></Button></Tip> : <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={() => setSwitchOpen(true)}><ArrowLeftRight size={18} />Cambiar usuario</Button>) : null}
         {sidebarCollapsed ? <Tip text="Cerrar Sesion"><Button w="full" justifyContent="center" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} /></Button></Tip> : <Button w="full" justifyContent="start" variant="ghost" color="white" _hover={{ bg: "whiteAlpha.200" }} onClick={onLogout}><LogOut size={18} />Cerrar Sesion</Button>}
       </Box>
     </Flex>
-    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} active={activeView === "pos"} /> : activeView === "tables" ? <TablesHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" || activeView === "tables" ? "hidden" : "auto"} p={activeView === "pos" || activeView === "tables" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView active={activeView === "pos"} /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} /> : activeView === "roles" ? <RolesView /> : activeView === "tables" ? <TablesView onNavigate={(view, param) => { setHistoryInvoice(param); setActiveView(view); }} /> : activeView === "history" ? <HistoryView initialInvoice={historyInvoice} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "statistics" ? <StatisticsView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
+    <Flex flex="1" minW="0" direction="column"><Flex h="72px" px="8" align="center" bg="white" borderBottomWidth="1px" borderColor="gray.200">{activeView === "pos" ? <PosHeaderBar userName={user.display_name || user.username} active={activeView === "pos"} /> : activeView === "tables" ? <TablesHeaderBar userName={user.display_name || user.username} /> : <Heading size="lg">{selectedTitle}</Heading>}</Flex><Box className="content-scroll" flex="1" minH="0" overflowY={activeView === "pos" || activeView === "tables" ? "hidden" : "auto"} p={activeView === "pos" || activeView === "tables" ? "0" : "10"}><Box display={activeView === "pos" ? "block" : "none"} h="full"><PosView active={activeView === "pos"} /></Box>{activeView === "home" ? <HomeView onNavigate={setActiveView} /> : activeView === "profile" ? <ProfileView user={user} onUpdated={onUserUpdated} /> : activeView === "updates" ? <UpdateView /> : activeView === "sql-editor" ? <SqlEditorView /> : activeView === "audit" ? <AuditView /> : activeView === "users" ? <UsersView onCurrentUserUpdated={onUserUpdated} onUsersChanged={() => setUsersVersion((v) => v + 1)} /> : activeView === "roles" ? <RolesView /> : activeView === "tables" ? <TablesView onNavigate={(view, param) => { setHistoryInvoice(param); setActiveView(view); }} /> : activeView === "history" ? <HistoryView initialInvoice={historyInvoice} /> : activeView === "cash" ? <CashRegisterView /> : activeView === "products" ? <ProductView /> : activeView === "inventory" ? <InventoryView /> : activeView === "statistics" ? <StatisticsView /> : activeView === "settings" ? <ConfigView /> : activeView === "pos" ? null : <Flex h="full" align="center" justify="center"><Text color="gray.500" fontSize="lg">{selectedTitle}</Text></Flex>}</Box></Flex>
   </Flex>
-  {switchOpen ? <SwitchUserDialog tenantId={sessionContext.current()!.tenantId} onClose={() => setSwitchOpen(false)} onSwitch={async (u) => { setSwitchOpen(false); setActiveView("home"); await onSwitchUser(u); notify.success(`Sesion iniciada como ${u.display_name || u.username}.`); }} /> : null}
+  {switchOpen ? <SwitchUserDialog tenantId={sessionContext.current()!.tenantId} currentUserId={user.id} onClose={() => setSwitchOpen(false)} onSwitch={async (u) => { setSwitchOpen(false); setActiveView("home"); await onSwitchUser(u); notify.success(`Sesion iniciada como ${u.display_name || u.username}.`); }} /> : null}
   </>;
 }
 
-function SwitchUserDialog({ tenantId, onClose, onSwitch }: { tenantId: string; onClose: () => void; onSwitch: (user: LocalUser) => Promise<void> }) {
+function SwitchUserDialog({ tenantId, currentUserId, onClose, onSwitch }: { tenantId: string; currentUserId: string; onClose: () => void; onSwitch: (user: LocalUser) => Promise<void> }) {
   const [users, setUsers] = useState<LocalUser[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { void authService.listUsers(tenantId).then((list) => setUsers(list.filter((u) => u.active))); }, [tenantId]);
+  useEffect(() => { void authService.listUsers(tenantId).then((list) => setUsers(list.filter((u) => u.active && u.id !== currentUserId))); }, [tenantId, currentUserId]);
   const options = users.map((u) => ({ value: u.id, label: u.display_name ? `${u.display_name} (${u.username})` : u.username }));
   const selected = users.find((u) => u.id === selectedId);
   async function enter() {

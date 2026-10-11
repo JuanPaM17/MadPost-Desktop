@@ -203,6 +203,17 @@ const migrations = [
   "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(synced_at, retry_count, id)",
   "CREATE INDEX IF NOT EXISTS idx_pending_deletes_status ON pending_deletes(status, id)",
   "CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_date ON audit_log(tenant_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS audit_log_items (
+    id          TEXT PRIMARY KEY,
+    audit_id    TEXT NOT NULL REFERENCES audit_log(id) ON DELETE CASCADE,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    label       TEXT,
+    quantity    REAL,
+    unit_price  REAL,
+    subtotal    REAL,
+    note        TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_audit_log_items_audit ON audit_log_items(audit_id)",
 ];
 
 class DatabaseManager {

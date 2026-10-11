@@ -1487,7 +1487,12 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
       const rootItems = allItems.filter((i) => !i.combo_table_order_item_id);
       if (rootItems.length > 0) {
         const lostTotal = rootItems.reduce((s, i) => s + i.subtotal, 0);
-        await auditService.log("CANCEL_TABLE_ORDER", "table_order", `Mesa ${table.name} cancelada con ${rootItems.length} producto(s) sin cobrar | Total perdido: ${fmtMoney(lostTotal)}`, order.id).catch(() => {});
+        await auditService.log(
+          "CANCELAR_MESA", "MESA",
+          `Mesa ${table.name} cancelada con ${rootItems.length} producto(s) sin cobrar | Total perdido: ${fmtMoney(lostTotal)}`,
+          order.id,
+          groupAuditItems(rootItems),
+        ).catch(() => {});
       }
       await tableOrderService.deleteOrder(order.id);
       onOrderClosed();
@@ -1617,6 +1622,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             }}
             onItemsChange={() => void reload()}
             onCancel={() => void handleCancelClient(client.id)}
+            tableName={table.name}
           />
         ))}
 
@@ -1626,7 +1632,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
           if (!unassigned.length) return null;
           return (
             <ClientSection label="Sin cliente asignado" total={unassigned.reduce((s, i) => s + i.subtotal, 0)} colorPalette="gray" defaultOpen>
-              <OrderItemList items={unassigned} allItems={allItems} onItemsChange={() => void reload()} />
+              <OrderItemList items={unassigned} allItems={allItems} onItemsChange={() => void reload()} tableName={table.name} />
             </ClientSection>
           );
         })()}
@@ -1917,7 +1923,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
 }
 
 // ---- ClientCard: un cliente completo con collapse, nombre editable, notas, items, delivery, tarjeta ----
-function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientChange, onItemsChange, onCancel }: {
+function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientChange, onItemsChange, onCancel, tableName }: {
   client: TableOrderClient;
   allItems: TableOrderItem[];
   itemsByClient: Map<string, TableOrderItem[]>;
@@ -1925,6 +1931,7 @@ function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientCh
   onClientChange: (c: TableOrderClient) => void;
   onItemsChange: () => void;
   onCancel: () => void;
+  tableName?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [nameVal, setNameVal] = useState(client.client_name ?? "");
@@ -1987,7 +1994,7 @@ function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientCh
             </Flex>
           ) : (
             <Box mb="3">
-              <OrderItemList items={clientItems} allItems={allItems} onItemsChange={onItemsChange} />
+              <OrderItemList items={clientItems} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} />
             </Box>
           )}
 
@@ -2431,6 +2438,21 @@ function fmtMoney(v: number) {
   return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v);
 }
 
+function groupAuditItems(items: { product_name: string; unit_price: number; quantity: number; subtotal: number }[]) {
+  const map = new Map<string, { label: string; quantity: number; unitPrice: number; subtotal: number }>();
+  for (const i of items) {
+    const key = `${i.product_name}__${i.unit_price}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.quantity += i.quantity;
+      existing.subtotal += i.subtotal;
+    } else {
+      map.set(key, { label: i.product_name, quantity: i.quantity, unitPrice: i.unit_price, subtotal: i.subtotal });
+    }
+  }
+  return Array.from(map.values());
+}
+
 type TablePayMethod = "cash" | "card" | "split";
 
 function TableCheckoutModal({ table, order, cash, clients, targetClientId, allItems, deliveryTypes, orderTotal, slotLabel, hideCancelButton, skipAutoClose, initialDeliveryOverride, onClose, onConfirmed }: {
@@ -2618,9 +2640,10 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
       const clientLabel = client?.client_name ? ` | Cliente: ${client.client_name}` : "";
       await auditService.log(
         "COBRAR_MESA",
-        "table_order",
+        "MESA",
         `Mesa: ${table.name}${clientLabel} | Factura: #${result.invoiceNumber} | Total: ${fmtMoney(total)} | Pago: ${payMethod}`,
         order.id,
+        groupAuditItems(rootItems),
       ).catch(() => {});
 
       notify.success(`Factura #${result.invoiceNumber}`, result.changeGiven > 0 ? `Cambio: ${fmtMoney(result.changeGiven)}` : undefined);
@@ -2960,7 +2983,7 @@ function groupKey(item: TableOrderItem, allItems: TableOrderItem[]): string {
   return `${item.product_id ?? item.product_name}|${item.selected_option ?? ""}|${addKey}|${sauceKey}|${childKey}`;
 }
 
-function OrderItemList({ items, allItems, onItemsChange }: { items: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void }) {
+function OrderItemList({ items, allItems, onItemsChange, tableName }: { items: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string }) {
   // Agrupar items por clave — preservando orden de insercion
   const groups = new Map<string, TableOrderItem[]>();
   for (const item of items) {
@@ -2971,7 +2994,7 @@ function OrderItemList({ items, allItems, onItemsChange }: { items: TableOrderIt
   return (
     <Stack gap="2">
       {[...groups.values()].map((group) => (
-        <OrderItemRow key={group[0].id} group={group} allItems={allItems} onItemsChange={onItemsChange} />
+        <OrderItemRow key={group[0].id} group={group} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} />
       ))}
     </Stack>
   );
@@ -3081,7 +3104,7 @@ function ComboChildRow({ child, onItemsChange }: { child: TableOrderItem; onItem
   );
 }
 
-function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void }) {
+function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string }) {
   const item = group[0];
   const totalQty = group.reduce((s, i) => s + i.quantity, 0);
   const totalSub = group.reduce((s, i) => s + i.subtotal, 0);
@@ -3169,7 +3192,10 @@ function OrderItemRow({ group, allItems, onItemsChange }: { group: TableOrderIte
   }
 
   async function decrement() {
-    await tableOrderService.decrementItem(item.id);
+    const result = await tableOrderService.decrementItem(item.id);
+    if (result === "removed") {
+      await auditService.log("ELIMINAR_ITEM_MESA", "MESA", `${item.product_name} eliminado de ${tableName ?? "mesa"}`, item.id).catch(() => {});
+    }
     onItemsChange?.();
   }
 

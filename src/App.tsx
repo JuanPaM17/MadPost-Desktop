@@ -16,6 +16,7 @@ import { rolesService } from "./features/roles/RolesService";
 import { UpdateDialog } from "./features/update/UpdateDialog";
 import { updateService, type UpdateInfo } from "./features/update/UpdateService";
 import { sessionContext } from "./core/session/SessionContext";
+import { auditService } from "./features/audit/AuditService";
 
 type Screen = "loading" | "migrating" | "license" | "login" | "recovery" | "setup" | "main";
 
@@ -93,6 +94,7 @@ function App() {
       tenantName: tenant.name,
       syncEnabled: cachedLicense?.sync_enabled === 1,
     });
+    await auditService.log("INICIO_SESION", "SESION", `Usuario: ${authenticatedUser.display_name || authenticatedUser.username}`, authenticatedUser.id).catch(() => {});
     setUser(authenticatedUser);
     setScreen("main");
     const update = await updateService.checkForUpdate();
@@ -105,7 +107,7 @@ function App() {
     : screen === "login" ? <LoginView tenantName={tenant.name} onLogin={async (username, password) => { await showMain(await authService.login(tenant.id, username, password)); }} onRecovery={() => setScreen("recovery")} />
     : screen === "recovery" ? <RecoveryView onRecover={recover} onBack={() => setScreen("login")} />
     : screen === "setup" ? <SetupView tenantName={tenant.name} initialAddress={tenant.address} initialPhone={tenant.phone} initialTaxId={tenant.taxId} onFinish={finishSetup} />
-    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }} onSwitchUser={showMain} />;
+    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { const session = sessionContext.current(); void auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(session?.user.display_name || session?.user.username) ?? ""}`, session?.user.id ?? null).catch(() => {}).finally(() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }); }} onSwitchUser={async (nextUser) => { const prev = sessionContext.current(); await auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(prev?.user.display_name || prev?.user.username) ?? ""} (cambio de usuario)`, prev?.user.id ?? null).catch(() => {}); await showMain(nextUser); }} />;
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}

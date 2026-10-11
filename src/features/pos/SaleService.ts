@@ -309,6 +309,11 @@ class SaleService {
       }
     }
 
+    const { auditService } = await import("../audit/AuditService");
+    const itemCount = req.items.reduce((s, i) => s + i.quantity, 0);
+    const origin = req.tableOrderId ? "Mesa" : "POS";
+    await auditService.log("CREAR_VENTA", "VENTA", `Factura #${invoiceNumber} | ${origin} | ${itemCount} producto(s) | Total: $${req.total} | Pago: ${req.paymentMethod}`, saleId);
+
     return { saleId, invoiceNumber, changeGiven: req.changeGiven ?? 0 };
   }
 
