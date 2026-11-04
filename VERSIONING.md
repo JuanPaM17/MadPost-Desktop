@@ -153,6 +153,19 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.5.0 — Modo prueba, ayuda por pantalla y auditorias completas
+
+**Nuevo:**
+- Modo prueba: opera la caja, las mesas y el punto de venta sin riesgo. Todo lo que hagas en este modo desaparece al cerrar sesion y no toca los datos reales del negocio.
+- Centro de ayuda contextual: cada pantalla tiene un boton que muestra videos y guias relacionados con esa seccion, sin tener que salir de lo que estas haciendo.
+- Pre-ticket desde mesas: genera una cuenta preliminar para entregarle al cliente antes de cobrar.
+- Actualizaciones y Mi Perfil ahora se pueden habilitar o restringir por rol desde Roles y Permisos.
+
+**Mejorado:**
+- El detalle de ventas y cobros en la auditoria ahora se ve completo: muestra cada adicion con cantidad y precio, las salsas, la opcion del producto y las notas del cliente.
+
+---
+
 ### v1.4.0 — Auditoria completa y mejoras de usuarios
 
 **Nuevo:**

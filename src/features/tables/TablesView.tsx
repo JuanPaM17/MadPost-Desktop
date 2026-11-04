@@ -1,4 +1,5 @@
 import { Badge, Box, Button, Flex, Heading, Input, Separator, Spinner, Stack, Text } from "@chakra-ui/react";
+import { HelpButton } from "../../components/ui/HelpButton";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, LayoutGrid, LayoutTemplate, LockKeyhole, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
 import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, type CatalogConfirmResult } from "../pos/ProductCatalog";
@@ -30,7 +31,10 @@ export function TablesHeaderBar({ userName }: { userName: string }) {
     <Flex w="full" align="center" justify="space-between" gap="5">
       <Heading size="lg">Mesas</Heading>
       <Text flex="1" textAlign="center" color="gray.600" fontSize="sm">{formatClock(now)}</Text>
-      <Text textAlign="right" fontWeight="medium">{userName}</Text>
+      <Flex align="center" gap="3">
+        <HelpButton screen="tables" />
+        <Text fontWeight="medium">{userName}</Text>
+      </Flex>
     </Flex>
   );
 }
@@ -1333,6 +1337,8 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   const [kitchenPrinter, setKitchenPrinter] = useState<string | null>(null);
   const [comandaCopies, setComandaCopies] = useState(1);
   const [sendingComanda, setSendingComanda] = useState(false);
+  const [printingPreTicket, setPrintingPreTicket] = useState(false);
+  const [bizSettings, setBizSettings] = useState<Awaited<ReturnType<typeof businessConfigService.load>> | null>(null);
   const [comandaModal, setComandaModal] = useState<"client-select" | "reprint-client-select" | "reprint-options" | null>(null);
   const [reprintClientId, setReprintClientId] = useState<string | null>(null);
   const [devPreviewLines, setDevPreviewLines] = useState<string[] | null>(null);
@@ -1383,6 +1389,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
       const kitchen = settings.printerKitchen && printers.includes(settings.printerKitchen) ? settings.printerKitchen : null;
       setKitchenPrinter(kitchen);
       setComandaCopies(settings.comandaCopies > 0 ? settings.comandaCopies : 1);
+      setBizSettings(settings);
     });
   }, []);
 
@@ -1454,6 +1461,28 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
       setSendingComanda(false);
       setComandaModal(null);
       setReprintClientId(null);
+    }
+  }
+
+  async function handlePreTicket() {
+    if (!bizSettings) return;
+    setMoreOpen(false);
+    setPrintingPreTicket(true);
+    try {
+      const allItems = Array.from(itemsByClient.values()).flat();
+      const rootI = allItems.filter((i) => !i.combo_table_order_item_id);
+      const domTotal = clients.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
+      const preTotal = rootI.reduce((s, i) => s + i.subtotal, 0) + domTotal;
+      const { saleService } = await import("../pos/SaleService");
+      const [allAdditions, allSauces] = await Promise.all([
+        import("../pos/PosService").then((m) => m.posService.additions()),
+        import("../pos/PosService").then((m) => m.posService.sauces().then((r) => r.items)),
+      ]);
+      await saleService.generatePreTicket(allItems, preTotal, table.name, bizSettings, allAdditions, allSauces);
+    } catch (err) {
+      notify.error(`Error al generar pre-ticket: ${String(err)}`);
+    } finally {
+      setPrintingPreTicket(false);
     }
   }
 
@@ -1692,6 +1721,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               </Button>
               {moreOpen && (
                 <Box position="absolute" bottom="110%" right="0" bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" boxShadow="lg" py="1" minW="170px" zIndex="popover">
+                  {hasItems && <ContextMenuItem label={printingPreTicket ? "Generando..." : "Pre-ticket"} onClick={() => { if (!printingPreTicket) void handlePreTicket(); }} />}
                   {(kitchenPrinter || import.meta.env.DEV) && <ContextMenuItem label="Reimprimir Comanda" onClick={() => void openReprintMenu()} />}
                   <ContextMenuItem label="Cerrar mesa" danger onClick={() => { setMoreOpen(false); setCancelConfirm(true); }} />
                 </Box>
@@ -2438,16 +2468,23 @@ function fmtMoney(v: number) {
   return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v);
 }
 
-function groupAuditItems(items: { product_name: string; unit_price: number; quantity: number; subtotal: number }[]) {
-  const map = new Map<string, { label: string; quantity: number; unitPrice: number; subtotal: number }>();
+function groupAuditItems(items: TableOrderItem[]) {
+  const map = new Map<string, { label: string; quantity: number; unitPrice: number; subtotal: number; note: string | null }>();
   for (const i of items) {
-    const key = `${i.product_name}__${i.unit_price}`;
+    const label = i.product_name;
+    const key = `${label}__${i.unit_price}__${i.selected_option ?? ""}__${i.additions.map((a) => `${a.name}:${a.quantity}`).join("|")}__${i.sauces.map((s) => s.name).join("|")}`;
+    const meta = JSON.stringify({
+      opt: i.selected_option ?? null,
+      adds: i.additions.map((a) => ({ name: a.name, qty: a.quantity, price: a.price })),
+      sauces: i.sauces.map((s) => s.name),
+      clientNote: i.notes ?? null,
+    });
     const existing = map.get(key);
     if (existing) {
       existing.quantity += i.quantity;
       existing.subtotal += i.subtotal;
     } else {
-      map.set(key, { label: i.product_name, quantity: i.quantity, unitPrice: i.unit_price, subtotal: i.subtotal });
+      map.set(key, { label, quantity: i.quantity, unitPrice: i.unit_price, subtotal: i.subtotal, note: meta });
     }
   }
   return Array.from(map.values());

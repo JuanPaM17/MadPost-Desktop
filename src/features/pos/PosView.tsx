@@ -6,6 +6,7 @@ import { cashRegisterService, type CashSession } from "../cashregister/CashRegis
 import { businessConfigService, printerService, type DeliveryType } from "../config/BusinessConfigService";
 import { notify } from "../../components/ui/AppToaster";
 import { Tip } from "../../components/ui/Tip";
+import { HelpButton } from "../../components/ui/HelpButton";
 import { posService, type PosAddition, type PosCategory, type PosCombo, type PosProduct, type PosSauce } from "./PosService";
 import { AdditionsModal, CategoryBar, filterItems, money, ProductGrid, SaucesModal, type CartChild, type CartItem, type PosGridItem, type SelectedCategory } from "./ProductCatalog";
 
@@ -140,7 +141,7 @@ function CartPanel({ cash, active, items, additions, sauces, maxSauces, total, o
   const selectedSauces = sauceChild?.sauces ?? sauceItem?.sauces ?? [];
   const sauceName = sauceChild?.name ?? sauceItem?.name ?? "";
   return <Flex w="440px" minW="380px" h="full" minH="0" shrink="0" overflow="hidden" direction="column" borderLeftWidth="1px" borderColor="gray.200" bg="white">
-    <Flex px="5" py="4" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between"><Flex align="center" gap="2"><ShoppingCart size={19} color="#4f46e5" /><Heading size="sm">Pedido</Heading>{items.length ? <Badge colorPalette="purple">{items.length}</Badge> : null}</Flex>{items.length ? <Button size="xs" variant="ghost" colorPalette="red" onClick={onClear}><Trash2 size={15} />Limpiar</Button> : null}</Flex>
+    <Flex px="5" py="4" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between"><Flex align="center" gap="2"><ShoppingCart size={19} color="#4f46e5" /><Heading size="sm">Pedido</Heading>{items.length ? <Badge colorPalette="purple">{items.length}</Badge> : null}</Flex><Flex align="center" gap="2">{items.length ? <Button size="xs" variant="ghost" colorPalette="red" onClick={onClear}><Trash2 size={15} />Limpiar</Button> : null}<HelpButton screen="pos" /></Flex></Flex>
     {!items.length ? <Flex flex="1" minH="0" align="center" justify="center" direction="column" px="6" color="gray.500" textAlign="center"><ShoppingCart size={32} strokeWidth={1.5} /><Text mt="4">Agrega productos para iniciar la venta.</Text></Flex> : <Box flex="1" minH="0" overflowY="auto" p="4">{items.map((item) => <Box key={item.key} pb="4" mb="4" borderBottomWidth="1px" borderColor="gray.100">
       <Flex justify="space-between" gap="2">
         <Text fontWeight="semibold">{item.name}</Text>

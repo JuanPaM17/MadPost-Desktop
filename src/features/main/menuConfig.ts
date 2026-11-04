@@ -1,4 +1,4 @@
-import { BarChart3, Boxes, Code2, Download, History, LayoutDashboard, Package, Settings, Shield, ShoppingCart, Table2, Users, WalletCards } from "lucide-react";
+import { BarChart3, Boxes, Code2, Download, History, LayoutDashboard, Package, Settings, Shield, ShoppingCart, Table2, Users, UserRound, WalletCards } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { PermissionCode } from "../roles/permissions";
 
@@ -29,6 +29,7 @@ export const MENU_ITEMS: MenuItemDef[] = [
   { id: "users",      label: "Usuarios",            icon: Users,                          permission: "users.view" },
   { id: "roles",      label: "Roles y Permisos",    icon: Shield,        adminOnly: true },
   { id: "settings",   label: "Configuracion",       icon: Settings,                       permission: "settings.view" },
-  { id: "updates",    label: "Actualizaciones",     icon: Download },
+  { id: "updates",    label: "Actualizaciones",     icon: Download,      permission: "updates.view" },
+  { id: "profile",    label: "Mi Perfil",           icon: UserRound,     permission: "profile.view" },
   { id: "sql-editor", label: "SQL Editor",          icon: Code2,         superAdminOrDev: true },
 ];

@@ -15,17 +15,18 @@ export function RolesView() {
   const [deleting, setDeleting] = useState<Role | null>(null);
   const [blockedUsers, setBlockedUsers] = useState<{ username: string; display_name: string | null }[] | null>(null);
   const tenantId = sessionContext.current()?.tenantId ?? "";
+  const isSuperAdmin = sessionContext.current()?.user.role === "SUPERADMIN";
 
   const loadRoles = useCallback(async () => {
     try {
-      const list = await rolesService.listRoles(tenantId);
+      const list = await rolesService.listRoles(tenantId, isSuperAdmin);
       setRoles(list);
       // Si habia uno seleccionado, actualizar la referencia
       setSelected((prev) => (prev ? (list.find((r) => r.id === prev.id) ?? list[0] ?? null) : list[0] ?? null));
     } catch {
       notify.error("No fue posible cargar los roles.");
     }
-  }, [tenantId]);
+  }, [tenantId, isSuperAdmin]);
 
   useEffect(() => { void loadRoles(); }, [loadRoles]);
 

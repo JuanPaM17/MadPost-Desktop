@@ -14,6 +14,7 @@ export type RuntimeContext = {
   tenantId: string;
   tenantName: string;
   syncEnabled: boolean;
+  isDemo?: boolean;
 };
 
 interface RuntimeService {
@@ -59,25 +60,34 @@ class PostLoginCoordinator {
   ];
 
   async start(context: RuntimeContext) {
-    if (this.activeTenantId === context.tenantId) {
+    if (this.activeTenantId === context.tenantId && !context.isDemo) {
       runtimeLogger.info("PostLoginCoordinator", "Servicios ya inicializados para la sesion actual.", { tenantId: context.tenantId });
       return;
     }
     if (this.activeTenantId) await this.stop();
     this.activeTenantId = context.tenantId;
-    runtimeLogger.info("PostLoginCoordinator", "Iniciando servicios posteriores al login.", { tenantId: context.tenantId, syncEnabled: context.syncEnabled });
-    const mobileEnabled = import.meta.env.DEV && await mobileDevicesService.loadAutoStart().catch(() => false);
-    for (const service of this.services) {
-      if (!mobileEnabled && (service instanceof MadPostApiServer || service instanceof MdnsPublisher)) {
-        runtimeLogger.info("PostLoginCoordinator", "Servidor local omitido por configuracion.", {});
-        continue;
+    runtimeLogger.info("PostLoginCoordinator", "Iniciando servicios posteriores al login.", { tenantId: context.tenantId, syncEnabled: context.syncEnabled, isDemo: context.isDemo ?? false });
+
+    // En modo demo no se arrancan servicios de fondo: sync, backup, comandos remotos ni API movil
+    if (!context.isDemo) {
+      const mobileEnabled = import.meta.env.DEV && await mobileDevicesService.loadAutoStart().catch(() => false);
+      for (const service of this.services) {
+        if (!mobileEnabled && (service instanceof MadPostApiServer || service instanceof MdnsPublisher)) {
+          runtimeLogger.info("PostLoginCoordinator", "Servidor local omitido por configuracion.", {});
+          continue;
+        }
+        try { await service.start(context); } catch (error) { runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar un servicio.", error); }
       }
-      try { await service.start(context); } catch (error) { runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar un servicio.", error); }
+      void rolesService.ensureSystemRoles(context.tenantId).catch((error) =>
+        runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar roles del sistema.", error),
+      );
+      const { ensureDemoUser } = await import("../auth/AuthService");
+      void ensureDemoUser(context.tenantId).catch((error) =>
+        runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar el usuario demo.", error),
+      );
     }
+
     void this.warmupCache();
-    void rolesService.ensureSystemRoles(context.tenantId).catch((error) =>
-      runtimeLogger.error("PostLoginCoordinator", "No fue posible inicializar roles del sistema.", error),
-    );
     runtimeLogger.info("PostLoginCoordinator", "Inicializacion posterior al login completada.", { tenantId: context.tenantId });
   }
 

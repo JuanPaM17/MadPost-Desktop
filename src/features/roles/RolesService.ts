@@ -2,7 +2,7 @@ import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { sessionContext } from "../../core/session/SessionContext";
 import { auditService } from "../audit/AuditService";
 import type { PermissionCode } from "./permissions";
-import { ADMIN_DEFAULT_PERMISSIONS, SELLER_DEFAULT_PERMISSIONS } from "./permissions";
+import { ADMIN_DEFAULT_PERMISSIONS, DEMO_PERMISSIONS, SELLER_DEFAULT_PERMISSIONS } from "./permissions";
 
 export type Role = {
   id: string;
@@ -16,10 +16,11 @@ class RolesService {
   // Roles
   // -----------------------------------------------------------------------
 
-  async listRoles(tenantId: string): Promise<Role[]> {
+  async listRoles(tenantId: string, includeDemo = false): Promise<Role[]> {
     const db = await databaseManager.database();
+    const filter = includeDemo ? "" : "AND name != 'DEMO'";
     return db.select<Role[]>(
-      "SELECT id, tenant_id, name, is_system FROM roles WHERE tenant_id = $1 ORDER BY is_system DESC, name COLLATE NOCASE",
+      `SELECT id, tenant_id, name, is_system FROM roles WHERE tenant_id = $1 ${filter} ORDER BY is_system DESC, name COLLATE NOCASE`,
       [tenantId],
     );
   }
@@ -128,16 +129,17 @@ class RolesService {
 
     if (!roles[0]) {
       // El rol no existe en la tabla todavia (base de datos sin migrar aun)
-      // Devolver los permisos por defecto segun el rol de sistema
+      if (userRole === "DEMO") return DEMO_PERMISSIONS;
       return userRole === "ADMIN" ? ADMIN_DEFAULT_PERMISSIONS : SELLER_DEFAULT_PERMISSIONS;
     }
 
     const permissions = await this.getPermissions(roles[0].id);
 
     // Si el rol existe pero no tiene permisos asignados:
-    // - ADMIN y SELLER de sistema usan sus defaults (compatibilidad con tenants sin migrar)
-    // - Roles custom sin permisos = sin acceso (el admin no ha configurado nada aun)
+    // - ADMIN, SELLER y DEMO de sistema usan sus defaults
+    // - Roles custom sin permisos = sin acceso
     if (permissions.length === 0) {
+      if (userRole === "DEMO") return DEMO_PERMISSIONS;
       if (userRole === "ADMIN" || userRole === "SELLER") {
         return userRole === "ADMIN" ? ADMIN_DEFAULT_PERMISSIONS : SELLER_DEFAULT_PERMISSIONS;
       }
@@ -156,6 +158,7 @@ class RolesService {
     for (const { name, defaults } of [
       { name: "ADMIN",  defaults: ADMIN_DEFAULT_PERMISSIONS },
       { name: "SELLER", defaults: SELLER_DEFAULT_PERMISSIONS },
+      { name: "DEMO",   defaults: DEMO_PERMISSIONS },
     ]) {
       const existing = await db.select<{ id: string }[]>(
         "SELECT id FROM roles WHERE tenant_id = $1 AND name = $2 LIMIT 1",

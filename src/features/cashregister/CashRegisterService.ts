@@ -208,16 +208,7 @@ class CashRegisterService {
     return { cash: closed, summary };
   }
   private async enqueueSync(action: "INSERT" | "UPDATE", cash: CashSession) {
-    const queued = await syncQueueRepository.enqueue(
-      "cash_sessions",
-      cash.id,
-      action,
-      cashPayload(cash),
-    );
-    if (!queued)
-      throw new Error(
-        "La caja se guardo localmente, pero la sincronizacion no esta habilitada en esta sesion.",
-      );
+    await syncQueueRepository.enqueue("cash_sessions", cash.id, action, cashPayload(cash));
   }
   async deleteClosedSession(cash: CashSession, skipRoleCheck = false) {
     const session = this.session();

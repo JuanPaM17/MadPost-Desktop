@@ -7,6 +7,9 @@ import { auditService } from "../audit/AuditService";
 const SUPERADMIN_USERNAME = "juanpamacast";
 const SUPERADMIN_PASSWORD = "1039700598";
 
+const DEMO_USERNAME = "MDP_DEMO";
+const DEMO_PASSWORD = "MDP_DEMO";
+
 class AuthService {
   async hasAdminUser(tenantId: string) {
     return userRepository.hasAdmin(tenantId);
@@ -86,7 +89,7 @@ class AuthService {
 
   async listUsers(tenantId: string) {
     const database = await databaseManager.database();
-    return database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE tenant_id=$1 AND role != 'SUPERADMIN' ORDER BY username COLLATE NOCASE", [tenantId]);
+    return database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE tenant_id=$1 AND role != 'SUPERADMIN' AND role != 'DEMO' ORDER BY username COLLATE NOCASE", [tenantId]);
   }
 
   async updateUser(user: LocalUser, username: string, displayName: string, role: UserRole) {
@@ -148,6 +151,20 @@ export async function ensureSuperAdmin(tenantId: string) {
     await userRepository.insert(user);
   }
   await syncQueueRepository.ensureUserInsert(user.id, user);
+}
+
+// El usuario demo es de sistema, igual que SUPERADMIN.
+// No se sincroniza con Supabase, no aparece en listados, no puede editarse.
+export async function ensureDemoUser(tenantId: string) {
+  const existing = await userRepository.findByUsername(tenantId, DEMO_USERNAME);
+  if (!existing || existing.role !== "DEMO") {
+    const user: LocalUser = {
+      id: crypto.randomUUID(), tenant_id: tenantId, username: DEMO_USERNAME,
+      password_hash: await hash(DEMO_PASSWORD, 12), display_name: "Modo Demo", role: "DEMO", active: 1,
+    };
+    await userRepository.insert(user);
+  }
+  // No llamar syncQueueRepository: el usuario demo nunca se sincroniza
 }
 
 function randomBlock() {

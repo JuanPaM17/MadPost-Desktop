@@ -16,7 +16,7 @@ type RemoteLicense = {
 type RemoteDevice = { id: string; device_id: string; hostname: string; active: boolean };
 
 export type LicenseActivation = { tenantId: string; tenantName: string; address: string | null; phone: string | null; taxId: string | null };
-export type Revalidation = "valid" | "offline" | "invalid";
+export type Revalidation = "valid" | "offline" | "invalid" | "device_blocked";
 
 class LicenseService {
   async hasValidCachedLicense() {
@@ -29,6 +29,23 @@ class LicenseService {
       return { address: data?.address ?? null, phone: data?.phone ?? null, taxId: data?.tax_id ?? null };
     } catch {
       return { address: null, phone: null, taxId: null };
+    }
+  }
+
+  /** Consulta Supabase por device_id para saber si este equipo esta bloqueado, sin necesitar cache local. */
+  async checkDeviceBlocked(): Promise<boolean> {
+    try {
+      const deviceId = await deviceService.getDeviceId();
+      const { data } = await supabaseConnection.getClient()
+        .from("license_devices")
+        .select("active")
+        .eq("device_id", deviceId)
+        .limit(1)
+        .maybeSingle<{ active: boolean }>();
+      if (!data) return false; // nunca registrado
+      return !data.active;
+    } catch {
+      return false;
     }
   }
 
@@ -61,11 +78,16 @@ class LicenseService {
       const deviceId = await this.registerDevice(remote, cached.device_id ?? undefined);
       const tenant = this.toTenant(remote);
       await this.cache(remote, tenant, deviceId);
+      // Si antes estaba marcado como bloqueado y ahora es valido, limpiar el flag.
+      await licenseRepository.setDeviceBlocked(cached.key, false);
       await ensureSuperAdmin(remote.tenant_id);
       return "valid";
     } catch (error) {
       if (error instanceof InvalidLicenseError) {
-        await licenseRepository.clear(cached.key);
+        if (error.isDeviceBlocked) {
+          await licenseRepository.setDeviceBlocked(cached.key, true);
+          return "device_blocked";
+        }
         return "invalid";
       }
       return "offline";
@@ -98,14 +120,14 @@ class LicenseService {
 
     const current = data.find((device) => device.device_id === deviceId);
     if (current) {
-      if (!current.active) throw new InvalidLicenseError();
+      if (!current.active) throw new InvalidLicenseError("Este dispositivo fue desactivado.", true);
       await this.touchDevice(current.id);
       return deviceId;
     }
 
     const sameHostname = data.find((device) => device.hostname === hostname);
     if (sameHostname) {
-      if (!sameHostname.active) throw new InvalidLicenseError();
+      if (!sameHostname.active) throw new InvalidLicenseError("Este dispositivo fue desactivado.", true);
       const { error: updateError } = await client
         .from("license_devices")
         .update({ device_id: deviceId, last_seen: new Date().toISOString() })
@@ -159,8 +181,10 @@ class LicenseService {
 }
 
 class InvalidLicenseError extends Error {
-  constructor(message = "La licencia no es valida, esta vencida o el dispositivo fue bloqueado.") {
+  readonly isDeviceBlocked: boolean;
+  constructor(message = "La licencia no es valida, esta vencida o el dispositivo fue bloqueado.", isDeviceBlocked = false) {
     super(message);
+    this.isDeviceBlocked = isDeviceBlocked;
   }
 }
 

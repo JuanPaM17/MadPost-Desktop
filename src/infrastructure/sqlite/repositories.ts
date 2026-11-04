@@ -28,6 +28,17 @@ export const licenseRepository = {
     const license = rows[0];
     return license && new Date(license.expires_at).getTime() > Date.now() ? license : null;
   },
+  async getAnyCached(): Promise<(CachedLicense & { device_blocked: number }) | null> {
+    const database = await databaseManager.database();
+    const rows = await database.select<(CachedLicense & { device_blocked: number })[]>(
+      "SELECT key, tenant_id, tenant_name, expires_at, validated_at, sync_enabled, device_id, device_blocked FROM licenses_cache ORDER BY validated_at DESC LIMIT 1",
+    );
+    return rows[0] ?? null;
+  },
+  async setDeviceBlocked(key: string, blocked: boolean) {
+    const database = await databaseManager.database();
+    await database.execute("UPDATE licenses_cache SET device_blocked = $1 WHERE key = $2", [blocked ? 1 : 0, key]);
+  },
   async save(license: CachedLicense) {
     const database = await databaseManager.database();
     await database.execute(
@@ -145,6 +156,8 @@ export const recoveryRepository = {
 
 export const syncQueueRepository = {
   async enqueue(tableName: string, recordId: string, action: "INSERT" | "UPDATE" | "DELETE", payload: unknown) {
+    const { sessionContext } = await import("../../core/session/SessionContext");
+    if (sessionContext.isDemo()) return false;
     const license = await licenseRepository.getValid();
     if (!license?.sync_enabled) return false;
     const database = await databaseManager.database();
@@ -205,6 +218,8 @@ export type SyncQueueEntry = {
 
 export const pendingDeletesRepository = {
   async enqueue(tableName: string, recordId: string) {
+    const { sessionContext } = await import("../../core/session/SessionContext");
+    if (sessionContext.isDemo()) return false;
     const license = await licenseRepository.getValid();
     if (!license?.sync_enabled) return false;
     const database = await databaseManager.database();

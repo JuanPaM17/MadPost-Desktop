@@ -160,29 +160,22 @@ function AuditDetailDialog({ entry, onClose }: { entry: AuditEntry; onClose: () 
   );
 }
 
-function groupItems(items: AuditItem[]): AuditItem[] {
-  const map = new Map<string, AuditItem>();
-  for (const item of items) {
-    const key = `${item.label ?? ""}__${item.unitPrice ?? ""}`;
-    const existing = map.get(key);
-    if (existing) {
-      map.set(key, {
-        ...existing,
-        quantity: existing.quantity !== null && item.quantity !== null ? existing.quantity + item.quantity : existing.quantity,
-        subtotal: existing.subtotal !== null && item.subtotal !== null ? existing.subtotal + item.subtotal : existing.subtotal,
-      });
-    } else {
-      map.set(key, { ...item });
-    }
+type ItemMeta = { opt: string | null; adds: { name: string; qty: number; price: number }[]; sauces: string[]; clientNote: string | null };
+
+function parseItemMeta(note: string | null): ItemMeta | null {
+  if (!note) return null;
+  try {
+    const parsed = JSON.parse(note) as unknown;
+    if (parsed && typeof parsed === "object" && "adds" in parsed) return parsed as ItemMeta;
+    return null;
+  } catch {
+    return null;
   }
-  return Array.from(map.values());
 }
 
 function AuditItemsTable({ items }: { items: AuditItem[] }) {
-  const grouped = groupItems(items);
-  const hasPrices = grouped.some((i) => i.unitPrice !== null || i.subtotal !== null);
-  const hasQty = grouped.some((i) => i.quantity !== null);
-  const hasNote = grouped.some((i) => i.note !== null);
+  const hasPrices = items.some((i) => i.unitPrice !== null || i.subtotal !== null);
+  const hasQty = items.some((i) => i.quantity !== null);
   return (
     <Box>
       <Text fontSize="xs" fontWeight="semibold" color="gray.500" mb="1">ITEMS</Text>
@@ -195,24 +188,95 @@ function AuditItemsTable({ items }: { items: AuditItem[] }) {
                 {hasQty ? <Table.ColumnHeader textAlign="right">Cant.</Table.ColumnHeader> : null}
                 {hasPrices ? <Table.ColumnHeader textAlign="right">Precio unit.</Table.ColumnHeader> : null}
                 {hasPrices ? <Table.ColumnHeader textAlign="right">Subtotal</Table.ColumnHeader> : null}
-                {hasNote ? <Table.ColumnHeader>Nota</Table.ColumnHeader> : null}
               </Table.Row>
             </Table.Header>
             <Table.Body>
-              {grouped.map((item) => (
-                <Table.Row key={item.id}>
-                  <Table.Cell>{item.label ?? "-"}</Table.Cell>
-                  {hasQty ? <Table.Cell textAlign="right">{item.quantity ?? "-"}</Table.Cell> : null}
-                  {hasPrices ? <Table.Cell textAlign="right">{item.unitPrice !== null ? fmtMoney(item.unitPrice) : "-"}</Table.Cell> : null}
-                  {hasPrices ? <Table.Cell textAlign="right">{item.subtotal !== null ? fmtMoney(item.subtotal) : "-"}</Table.Cell> : null}
-                  {hasNote ? <Table.Cell>{item.note ?? ""}</Table.Cell> : null}
-                </Table.Row>
-              ))}
+              {items.map((item) => {
+                const meta = parseItemMeta(item.note);
+                return (
+                  <AuditItemRow key={item.id} item={item} meta={meta} hasQty={hasQty} hasPrices={hasPrices} />
+                );
+              })}
             </Table.Body>
           </Table.Root>
         </Box>
       </Box>
     </Box>
+  );
+}
+
+function AuditItemRow({ item, meta, hasQty, hasPrices }: { item: AuditItem; meta: ItemMeta | null; hasQty: boolean; hasPrices: boolean }) {
+  const hasExtras = meta && (meta.opt || meta.adds.length > 0 || meta.sauces.length > 0 || meta.clientNote);
+  return (
+    <>
+      <Table.Row>
+        <Table.Cell>
+          <Box>
+            <Text fontSize="sm">{item.label ?? "-"}</Text>
+            {meta ? (
+              <Flex mt="1" gap="1" wrap="wrap" align="center">
+                {meta.opt ? (
+                  <Badge size="sm" colorPalette="purple" variant="solid">{meta.opt}</Badge>
+                ) : null}
+                {meta.sauces.map((s) => (
+                  <Badge key={s} size="sm" colorPalette="green" variant="subtle">{s}</Badge>
+                ))}
+                {meta.clientNote ? (
+                  <Text fontSize="xs" color="gray.500" fontStyle="italic">"{meta.clientNote}"</Text>
+                ) : null}
+              </Flex>
+            ) : (
+              /* registro viejo: note es texto plano, mostrar como estaba */
+              item.note ? <Text fontSize="xs" color="gray.500" mt="0.5">{item.note}</Text> : null
+            )}
+          </Box>
+        </Table.Cell>
+        {hasQty ? <Table.Cell textAlign="right" verticalAlign="top">{item.quantity ?? "-"}</Table.Cell> : null}
+        {hasPrices ? <Table.Cell textAlign="right" verticalAlign="top">{item.unitPrice !== null ? fmtMoney(item.unitPrice) : "-"}</Table.Cell> : null}
+        {hasPrices ? <Table.Cell textAlign="right" verticalAlign="top">{item.subtotal !== null ? fmtMoney(item.subtotal) : "-"}</Table.Cell> : null}
+      </Table.Row>
+      {/* Subtabla de adiciones con precio */}
+      {hasExtras && meta.adds.length > 0 ? (
+        <>
+          <Table.Row bg="purple.50">
+            <Table.Cell py="1" pl="8">
+              <Flex align="center" gap="2">
+                <Box w="4px" h="4px" borderRadius="full" bg="purple.400" flexShrink="0" />
+                <Text fontSize="xs" color="purple.700" fontStyle="italic">Adiciones</Text>
+              </Flex>
+            </Table.Cell>
+            {hasQty ? <Table.Cell py="0" /> : null}
+            {hasPrices ? <Table.Cell py="0" /> : null}
+            {hasPrices ? <Table.Cell py="0" /> : null}
+          </Table.Row>
+          {meta.adds.map((a) => (
+            <Table.Row key={a.name} bg="purple.50">
+              <Table.Cell py="0.5" pl="12">
+                <Flex align="center" gap="2">
+                  <Box w="3px" h="3px" borderRadius="full" bg="purple.300" flexShrink="0" />
+                  <Text fontSize="xs" color="purple.700">{a.name}</Text>
+                </Flex>
+              </Table.Cell>
+              {hasQty ? (
+                <Table.Cell py="0.5" textAlign="right">
+                  <Text fontSize="xs" color="purple.600">{a.qty}</Text>
+                </Table.Cell>
+              ) : null}
+              {hasPrices ? (
+                <Table.Cell py="0.5" textAlign="right">
+                  <Text fontSize="xs" color="purple.600">{a.price > 0 ? fmtMoney(a.price) : "gratis"}</Text>
+                </Table.Cell>
+              ) : null}
+              {hasPrices ? (
+                <Table.Cell py="0.5" textAlign="right">
+                  <Text fontSize="xs" color="purple.600">{a.price > 0 ? fmtMoney(a.price * a.qty) : "-"}</Text>
+                </Table.Cell>
+              ) : null}
+            </Table.Row>
+          ))}
+        </>
+      ) : null}
+    </>
   );
 }
 

@@ -2,25 +2,67 @@ import { Alert, Badge, Box, Button, Flex, Heading, Input, Stack, Text } from "@c
 import { useState, useEffect, type FormEvent, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { migrationService } from "../migration/MigrationService";
+import { licenseRepository } from "../../infrastructure/sqlite/repositories";
 
 type Props = { online: boolean | null; onActivate: (key: string) => Promise<void>; onRetry: () => Promise<void> };
 
 export function LicenseView({ online, onActivate, onRetry }: Props) {
   const [key, setKey] = useState(""); const [error, setError] = useState(""); const [submitting, setSubmitting] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  const [hadLicense, setHadLicense] = useState(false);
   const disabled = online === false || submitting;
 
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => {});
     void migrationService.bootCheck();
+    void licenseRepository.getAnyCached().then((cached) => { if (cached) setHadLicense(true); });
   }, []);
 
   async function activate() { setError(""); setSubmitting(true); try { await onActivate(key); } catch (reason) { setError(reason instanceof Error ? reason.message : "No fue posible activar la licencia."); } finally { setSubmitting(false); } }
   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!disabled && key.trim()) void activate(); }
-  return <AuthFrame activeStep={1}><form onSubmit={submit} style={{ width: "100%", maxWidth: "430px" }}><Stack gap="6"><Box><Badge colorPalette="purple" mb="3">PRIMER ACCESO</Badge><Heading size="2xl">Activar licencia</Heading><Text mt="2" color="gray.600">Ingresa tu clave para desbloquear el sistema.</Text></Box>
-    {online === false ? <Alert.Root status="warning"><Alert.Indicator /><Alert.Content><Alert.Title>Sin conexion a internet</Alert.Title><Alert.Description>La primera activacion requiere conexion.</Alert.Description></Alert.Content><Button size="sm" variant="outline" onClick={onRetry}>Reintentar</Button></Alert.Root> : null}
-    <Stack gap="2"><Text fontWeight="semibold">Clave de licencia</Text><Input value={key} onChange={(event) => setKey(event.target.value)} disabled={disabled} placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" fontFamily="mono" /></Stack>
-    {error ? <Text color="red.600" fontSize="sm">{error}</Text> : null}<Button type="submit" colorPalette="purple" size="lg" disabled={disabled || !key.trim()}>{submitting ? "Verificando..." : "Activar licencia"}</Button><Text color="gray.400" fontSize="xs">MadPost POS{appVersion ? ` v${appVersion}` : ""}</Text></Stack></form></AuthFrame>;
+  return (
+    <AuthFrame activeStep={1}>
+      <form onSubmit={submit} style={{ width: "100%", maxWidth: "430px" }}>
+        <Stack gap="6">
+          <Box>
+            <Badge colorPalette="purple" mb="3">{hadLicense ? "LICENCIA" : "PRIMER ACCESO"}</Badge>
+            <Heading size="2xl">{hadLicense ? "Tu licencia expiro" : "Activar licencia"}</Heading>
+            <Text mt="2" color="gray.600">
+              {hadLicense
+                ? "Tu periodo de acceso ha terminado. Ingresa una clave nueva o renovada para continuar."
+                : "Ingresa tu clave para desbloquear el sistema."}
+            </Text>
+          </Box>
+          {hadLicense ? (
+            <Alert.Root status="warning">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>Licencia vencida</Alert.Title>
+                <Alert.Description>Contacta a tu proveedor para renovar o adquirir una nueva licencia.</Alert.Description>
+              </Alert.Content>
+            </Alert.Root>
+          ) : null}
+          {online === false ? (
+            <Alert.Root status="warning">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>Sin conexion a internet</Alert.Title>
+                <Alert.Description>La activacion requiere conexion.</Alert.Description>
+              </Alert.Content>
+              <Button size="sm" variant="outline" onClick={onRetry}>Reintentar</Button>
+            </Alert.Root>
+          ) : null}
+          <Stack gap="2">
+            <Text fontWeight="semibold">Clave de licencia</Text>
+            <Input value={key} onChange={(e) => setKey(e.target.value)} disabled={disabled} placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" fontFamily="mono" />
+          </Stack>
+          {error ? <Text color="red.600" fontSize="sm">{error}</Text> : null}
+          <Button type="submit" colorPalette="purple" size="lg" disabled={disabled || !key.trim()}>{submitting ? "Verificando..." : "Activar licencia"}</Button>
+          <Text color="gray.400" fontSize="xs">MadPost POS{appVersion ? ` v${appVersion}` : ""}</Text>
+        </Stack>
+      </form>
+    </AuthFrame>
+  );
 }
 
 export function AuthFrame({ activeStep, children }: { activeStep: number; children: ReactNode }) {

@@ -21,7 +21,9 @@ export type PermissionCode =
   | "settings.export_import"
   | "settings.edit"
   | "users.view"
-  | "users.manage";
+  | "users.manage"
+  | "updates.view"
+  | "profile.view";
 
 export type PermissionDef = {
   code: PermissionCode;
@@ -59,6 +61,10 @@ export const PERMISSION_DEFS: PermissionDef[] = [
   // Usuarios
   { code: "users.view",               module: "users",      label: "Acceder a Usuarios" },
   { code: "users.manage",             module: "users",      label: "Gestionar usuarios" },
+  // Actualizaciones
+  { code: "updates.view",             module: "updates",    label: "Acceder a Actualizaciones" },
+  // Perfil
+  { code: "profile.view",             module: "profile",    label: "Acceder a Mi Perfil" },
 ];
 
 // Permisos por modulo: el item del menu aparece si el usuario tiene al menos uno de estos
@@ -73,6 +79,8 @@ export const MENU_PERMISSION_MAP: Record<string, PermissionCode[]> = {
   audit:      ["audit.view"],
   settings:   ["settings.view"],
   users:      ["users.view"],
+  updates:    ["updates.view"],
+  profile:    ["profile.view"],
 };
 
 // Permisos por defecto para ADMIN (todo excepto superadmin)
@@ -86,6 +94,19 @@ export const ADMIN_DEFAULT_PERMISSIONS: PermissionCode[] = [
   "audit.view",
   "settings.view", "settings.edit", "settings.export_import",
   "users.view", "users.manage",
+  "updates.view",
+  "profile.view",
+];
+
+// Permisos para el usuario DEMO (solo operacion de caja, sin administracion)
+export const DEMO_PERMISSIONS: PermissionCode[] = [
+  "pos.use",
+  "tables.use",
+  "cash.view",
+  "history.view",
+  "statistics.view",
+  "audit.view",
+  "inventory.view",
 ];
 
 // Permisos por defecto para SELLER (vendedor basico)
@@ -100,6 +121,7 @@ export const SELLER_DEFAULT_PERMISSIONS: PermissionCode[] = [
   "audit.view",
   "settings.view",
   "settings.edit",
+  "profile.view",
 ];
 
 // Etiquetas legibles para los modulos
@@ -114,7 +136,9 @@ export const MODULE_LABELS: Record<string, string> = {
   audit:      "Auditoria",
   settings:   "Configuracion",
   users:      "Usuarios",
+  updates:    "Actualizaciones",
+  profile:    "Mi Perfil",
 };
 
 // Orden en que se muestran los modulos en la pantalla de permisos
-export const MODULE_ORDER = ["pos", "tables", "cash", "history", "products", "inventory", "statistics", "audit", "settings", "users"];
+export const MODULE_ORDER = ["pos", "tables", "cash", "history", "products", "inventory", "statistics", "audit", "settings", "users", "updates", "profile"];

@@ -17,8 +17,9 @@ import { UpdateDialog } from "./features/update/UpdateDialog";
 import { updateService, type UpdateInfo } from "./features/update/UpdateService";
 import { sessionContext } from "./core/session/SessionContext";
 import { auditService } from "./features/audit/AuditService";
+import { databaseManager } from "./infrastructure/sqlite/DatabaseManager";
 
-type Screen = "loading" | "migrating" | "license" | "login" | "recovery" | "setup" | "main";
+type Screen = "loading" | "migrating" | "license" | "blocked" | "login" | "recovery" | "setup" | "main" | "demo-loading";
 
 function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -35,24 +36,29 @@ function App() {
 
   async function boot() {
     setScreen("loading");
-    if (await migrationService.javaDbExists() && await migrationService.hasChanges()) {
-      setScreen("migrating");
-      await migrationService.bootCheck((p) => setMigrationProgress(p));
-      await new Promise<void>((resolve) => {
-        let secs = 5;
-        setMigrationProgress({ phase: "done" });
-        setMigrationCountdown(secs);
-        const interval = setInterval(() => {
-          secs -= 1;
-          setMigrationCountdown(secs);
-          if (secs <= 0) { clearInterval(interval); resolve(); }
-        }, 1000);
-      });
-      window.location.reload();
-      return;
-    }
-    const result = await startApplication(() => { setTenant({ id: "", name: "", address: "", phone: "", taxId: "" }); setOnline(false); setScreen("license"); });
+    await databaseManager.cleanupOrphanDemoDb();
+    // if (await migrationService.javaDbExists() && await migrationService.hasChanges()) {
+    //   setScreen("migrating");
+    //   await migrationService.bootCheck((p) => setMigrationProgress(p));
+    //   await new Promise<void>((resolve) => {
+    //     let secs = 5;
+    //     setMigrationProgress({ phase: "done" });
+    //     setMigrationCountdown(secs);
+    //     const interval = setInterval(() => {
+    //       secs -= 1;
+    //       setMigrationCountdown(secs);
+    //       if (secs <= 0) { clearInterval(interval); resolve(); }
+    //     }, 1000);
+    //   });
+    //   window.location.reload();
+    //   return;
+    // }
+    const result = await startApplication((reason) => {
+      setTenant({ id: "", name: "", address: "", phone: "", taxId: "" });
+      setScreen(reason === "blocked" ? "blocked" : "license");
+    });
     if (result.screen === "license") { setOnline(result.online); setScreen("license"); return; }
+    if (result.screen === "blocked") { setScreen("blocked"); return; }
     const hasAdmin = await authService.hasAdminUser(result.tenantId);
     let address = result.address ?? ""; let phone = result.phone ?? ""; let taxId = result.taxId ?? "";
     if (!hasAdmin) {
@@ -86,28 +92,47 @@ function App() {
   }
 
   async function showMain(authenticatedUser: LocalUser) {
+    const isDemo = authenticatedUser.role === "DEMO";
+
+    if (isDemo) {
+      setScreen("demo-loading");
+      try {
+        await databaseManager.switchToDemoDb();
+      } catch (error) {
+        setScreen("login");
+        const { notify } = await import("./components/ui/AppToaster");
+        notify.error("No fue posible preparar el modo demo. Intenta de nuevo.", error instanceof Error ? error.message : undefined);
+        return;
+      }
+    }
+
     const permissions = await rolesService.loadUserPermissions(authenticatedUser.tenant_id, authenticatedUser.role);
-    sessionContext.login(authenticatedUser, tenant.name, permissions);
+    sessionContext.login(authenticatedUser, tenant.name, permissions, isDemo);
     const cachedLicense = await licenseService.hasValidCachedLicense();
     await postLoginCoordinator.start({
       tenantId: tenant.id,
       tenantName: tenant.name,
       syncEnabled: cachedLicense?.sync_enabled === 1,
+      isDemo,
     });
     await auditService.log("INICIO_SESION", "SESION", `Usuario: ${authenticatedUser.display_name || authenticatedUser.username}`, authenticatedUser.id).catch(() => {});
     setUser(authenticatedUser);
     setScreen("main");
-    const update = await updateService.checkForUpdate();
-    if (update) setPendingUpdate(update);
+    if (!isDemo) {
+      const update = await updateService.checkForUpdate();
+      if (update) setPendingUpdate(update);
+    }
   }
 
   const content = screen === "loading" ? <LoadingView />
+    : screen === "demo-loading" ? <DemoLoadingView />
     : screen === "migrating" ? <MigratingView progress={migrationProgress} countdown={migrationCountdown} />
+    : screen === "blocked" ? <BlockedDeviceView />
     : screen === "license" ? <LicenseView online={online} onActivate={activate} onRetry={async () => setOnline(await licenseService.isReachable())} />
     : screen === "login" ? <LoginView tenantName={tenant.name} onLogin={async (username, password) => { await showMain(await authService.login(tenant.id, username, password)); }} onRecovery={() => setScreen("recovery")} />
     : screen === "recovery" ? <RecoveryView onRecover={recover} onBack={() => setScreen("login")} />
     : screen === "setup" ? <SetupView tenantName={tenant.name} initialAddress={tenant.address} initialPhone={tenant.phone} initialTaxId={tenant.taxId} onFinish={finishSetup} />
-    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { const session = sessionContext.current(); void auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(session?.user.display_name || session?.user.username) ?? ""}`, session?.user.id ?? null).catch(() => {}).finally(() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); }); }} onSwitchUser={async (nextUser) => { const prev = sessionContext.current(); await auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(prev?.user.display_name || prev?.user.username) ?? ""} (cambio de usuario)`, prev?.user.id ?? null).catch(() => {}); await showMain(nextUser); }} />;
+    : <MainView user={user!} tenantName={tenant.name} onUserUpdated={(updatedUser) => { sessionContext.login(updatedUser, tenant.name, sessionContext.current()?.permissions ?? []); setUser(updatedUser); }} onLogout={() => { const session = sessionContext.current(); const wasDemo = session?.isDemo ?? false; void auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(session?.user.display_name || session?.user.username) ?? ""}`, session?.user.id ?? null).catch(() => {}).finally(() => { sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("login"); if (wasDemo) { void databaseManager.switchToProductionDb(); } }); }} onSwitchUser={async (nextUser) => { const prev = sessionContext.current(); const wasDemo = prev?.isDemo ?? false; await auditService.log("CIERRE_SESION", "SESION", `Usuario: ${(prev?.user.display_name || prev?.user.username) ?? ""} (cambio de usuario)`, prev?.user.id ?? null).catch(() => {}); sessionContext.logout(); void postLoginCoordinator.stop(); setUser(null); setScreen("loading"); if (wasDemo) { await databaseManager.switchToProductionDb(); } await showMain(nextUser); }} />;
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
@@ -137,6 +162,30 @@ function MigratingView({ progress, countdown }: { progress: MigrationProgress | 
 
 function LoadingView() {
   return <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50"><Box className="app-loading-mark" w="72px" h="72px" borderRadius="md" overflow="hidden"><img src="/logo.png" alt="MadPost" style={{ width: "100%", height: "100%", objectFit: "contain" }} /></Box><Spinner mt="7" size="lg" color="#6366f1" borderWidth="3px" /><Heading mt="6" size="lg">MadPost</Heading><Text mt="2" color="gray.500">Preparando tu espacio de trabajo</Text></Flex>;
+}
+
+function DemoLoadingView() {
+  return <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50"><Box w="72px" h="72px" borderRadius="md" overflow="hidden"><img src="/logo.png" alt="MadPost" style={{ width: "100%", height: "100%", objectFit: "contain" }} /></Box><Spinner mt="7" size="lg" color="#6366f1" borderWidth="3px" /><Heading mt="6" size="lg">Modo Demo</Heading><Text mt="2" color="gray.500">Preparando entorno de prueba...</Text></Flex>;
+}
+
+function BlockedDeviceView() {
+  return (
+    <Flex minH="100vh" direction="column" align="center" justify="center" bg="gray.50" p="8">
+      <Box w="72px" h="72px" borderRadius="md" overflow="hidden">
+        <img src="/logo.png" alt="MadPost" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+      </Box>
+      <Heading mt="6" size="lg" textAlign="center">Equipo desactivado</Heading>
+      <Text mt="3" color="gray.500" textAlign="center" maxW="360px">
+        Este equipo fue desactivado por el administrador y no puede acceder al sistema.
+        Comunicate con tu proveedor para reactivarlo.
+      </Text>
+      <Box mt="6" px="5" py="3" bg="red.50" borderWidth="1px" borderColor="red.200" borderRadius="md" maxW="360px">
+        <Text fontSize="sm" color="red.600" textAlign="center">
+          Si crees que esto es un error, contacta al administrador de tu licencia.
+        </Text>
+      </Box>
+    </Flex>
+  );
 }
 
 function RecoveryCodeDialog({ code, onClose }: { code: string; onClose: () => void }) {

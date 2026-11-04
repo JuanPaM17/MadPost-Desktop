@@ -312,7 +312,21 @@ class SaleService {
     const { auditService } = await import("../audit/AuditService");
     const itemCount = req.items.reduce((s, i) => s + i.quantity, 0);
     const origin = req.tableOrderId ? "Mesa" : "POS";
-    await auditService.log("CREAR_VENTA", "VENTA", `Factura #${invoiceNumber} | ${origin} | ${itemCount} producto(s) | Total: $${req.total} | Pago: ${req.paymentMethod}`, saleId);
+    const auditItems = req.items
+      .filter((i) => i.kind !== "combo" || !i.children?.length)
+      .flatMap((i) => {
+        const adds = Object.entries(i.additions)
+          .filter(([, qty]) => qty > 0)
+          .map(([id, qty]) => {
+            const a = allAdditions.find((a) => a.id === id);
+            return a ? { name: a.name, qty, price: a.price } : null;
+          })
+          .filter((a): a is { name: string; qty: number; price: number } => a !== null);
+        const sauces = i.sauces.map((id) => allSauces.find((s) => s.id === id)?.name ?? id);
+        const meta = JSON.stringify({ opt: i.selectedOption ?? null, adds, sauces, clientNote: i.note || null });
+        return [{ label: i.name, quantity: i.quantity, unitPrice: i.price, subtotal: i.price * i.quantity, note: meta }];
+      });
+    await auditService.log("CREAR_VENTA", "VENTA", `Factura #${invoiceNumber} | ${origin} | ${itemCount} producto(s) | Total: $${req.total} | Pago: ${req.paymentMethod}`, saleId, auditItems);
 
     return { saleId, invoiceNumber, changeGiven: req.changeGiven ?? 0 };
   }
@@ -650,6 +664,137 @@ class SaleService {
         await invoke("save_and_open_invoice_pdf", { sessionNumber, fileName, bytes: Array.from(uint8) });
       } catch { /* Non-fatal: archivo ya guardado */ }
     }
+  }
+
+  async generatePreTicket(
+    items: import("../tables/TableOrderService").TableOrderItem[],
+    total: number,
+    tableName: string,
+    bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string; logoPath: string | null },
+    allAdditions: PosAddition[],
+    allSauces: PosSauce[],
+  ): Promise<void> {
+    const PT_WIDTH = 164;
+    const MARGIN = 8;
+    const CONTENT_WIDTH = PT_WIDTH - MARGIN * 2;
+    const LINE_H = 9;
+    const DIVIDER = "--------------------------------";
+
+    const render = async (doc: jsPDF) => {
+      let y = MARGIN + 4;
+
+      const setStyle = (size: number, bold: boolean) => {
+        doc.setFontSize(size);
+        doc.setFont("helvetica", bold ? "bold" : "normal");
+      };
+      const centerText = (text: string, size: number, bold = false) => {
+        setStyle(size, bold);
+        doc.text(text, PT_WIDTH / 2, y, { align: "center" });
+        y += LINE_H;
+      };
+      const leftText = (text: string, size = 7, bold = false) => {
+        setStyle(size, bold);
+        const lines = doc.splitTextToSize(text, CONTENT_WIDTH) as string[];
+        doc.text(lines, MARGIN, y);
+        y += LINE_H * lines.length;
+      };
+      const rowText = (leftStr: string, rightStr: string, size = 7, bold = false) => {
+        setStyle(size, bold);
+        const maxLeft = CONTENT_WIDTH - doc.getTextWidth(rightStr) - 2;
+        const truncated = doc.splitTextToSize(leftStr, maxLeft)[0] as string;
+        doc.text(truncated, MARGIN, y);
+        if (rightStr) doc.text(rightStr, PT_WIDTH - MARGIN, y, { align: "right" });
+        y += LINE_H;
+      };
+      const divider = () => { leftText(DIVIDER, 7, false); };
+      const gap = (pt = 3) => { y += pt; };
+
+      // Logo
+      if (bizSettings.logoPath) {
+        try {
+          const logoBytes = await readFile(bizSettings.logoPath);
+          const base64 = btoa(String.fromCharCode(...logoBytes));
+          const ext = bizSettings.logoPath.split(".").pop()?.toLowerCase() ?? "png";
+          const mime = ext === "jpg" || ext === "jpeg" ? "JPEG" : "PNG";
+          const MAX_W = 120;
+          doc.addImage(`data:image/${mime.toLowerCase()};base64,${base64}`, mime, (PT_WIDTH - MAX_W) / 2, y, MAX_W, 0);
+          y += 34;
+          gap(2);
+        } catch { /* logo opcional */ }
+      }
+
+      // Encabezado
+      if (bizSettings.name) centerText(bizSettings.name, 11, true);
+      if (bizSettings.address) centerText(bizSettings.address, 7);
+      if (bizSettings.phone) centerText(`Tel: ${bizSettings.phone}`, 7);
+      divider();
+
+      // Meta
+      const dateStr = new Intl.DateTimeFormat("es-CO", {
+        timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+      }).format(new Date());
+      centerText("CUENTA", 10, true);
+      leftText(`Mesa:  ${tableName}`);
+      leftText(`Fecha: ${dateStr}`);
+      divider();
+
+      // Items (solo root items)
+      const rootItems = items.filter((i) => !i.combo_table_order_item_id);
+      for (const item of rootItems) {
+        rowText(`${item.quantity}x ${item.product_name}`, money(item.subtotal), 7, true);
+        if (item.unit_price !== (item.original_unit_price ?? item.unit_price)) {
+          leftText(`   Precio original: ${money((item.original_unit_price ?? item.unit_price) * item.quantity)}`);
+        }
+        if (item.selected_option) leftText(`   >> ${item.selected_option}`);
+        for (const add of item.additions) {
+          if (add.quantity <= 0) continue;
+          const label = add.quantity > 1 ? `   + ${add.quantity}x ${add.name}` : `   + ${add.name}`;
+          rowText(label, add.price > 0 ? `+${money(add.price * add.quantity)}` : "");
+        }
+        if (item.sauces.length > 0) {
+          leftText(`   Salsas: ${item.sauces.map((s) => s.name).join(", ")}`);
+        }
+        if (item.notes) leftText(`   Nota: ${item.notes}`);
+        // Hijos de combo
+        const children = items.filter((c) => c.combo_table_order_item_id === item.id);
+        for (const child of children) {
+          leftText(`  - ${child.quantity > 1 ? `${child.quantity}x ` : ""}${child.product_name}`);
+          if (child.selected_option) leftText(`      >> ${child.selected_option}`);
+          for (const add of child.additions) {
+            if (add.quantity <= 0) continue;
+            rowText(`      + ${add.quantity > 1 ? `${add.quantity}x ` : ""}${add.name}`, add.price > 0 ? `+${money(add.price * add.quantity)}` : "");
+          }
+          if (child.sauces.length > 0) {
+            leftText(`      Salsas: ${child.sauces.map((s) => s.name).join(", ")}`);
+          }
+        }
+      }
+
+      // Total
+      divider();
+      rowText("TOTAL", money(total), 11, true);
+      gap(2);
+
+      // Pie
+      divider();
+      centerText(bizSettings.invoiceFooter || "Gracias por su compra!", 7);
+      gap(LINE_H * 4);
+
+      return y;
+    };
+
+    const measDoc = new jsPDF({ unit: "pt", format: [PT_WIDTH, 2000], orientation: "portrait" });
+    const finalY = await render(measDoc);
+    const pageHeight = finalY + MARGIN;
+
+    const doc = new jsPDF({ unit: "pt", format: [PT_WIDTH, pageHeight], orientation: "portrait" });
+    await render(doc);
+
+    const uint8 = new Uint8Array(doc.output("arraybuffer"));
+    try {
+      await invoke("save_and_open_invoice_pdf", { sessionNumber: 0, fileName: `preticket-${tableName}.pdf`, bytes: Array.from(uint8) });
+    } catch { /* non-fatal */ }
   }
 
   normalizeWhatsAppPhone(phone: string): string | null {

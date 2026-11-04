@@ -3,8 +3,17 @@ import { Check, Pencil, Save, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import type { LocalUser } from "../../core/types";
 import { authService } from "./AuthService";
+import { sessionContext } from "../../core/session/SessionContext";
 
 export function ProfileView({ user, onUpdated }: { user: LocalUser; onUpdated: (user: LocalUser) => void }) {
+  if (sessionContext.isDemo()) {
+    return (
+      <Flex direction="column" align="center" justify="center" h="full" gap="3" color="gray.500">
+        <ShieldCheck size={40} />
+        <Text fontWeight="semibold">Perfil no disponible en modo demo</Text>
+      </Flex>
+    );
+  }
   const [name, setName] = useState(user.display_name || "");
   const [username, setUsername] = useState(user.username);
   const [password, setPassword] = useState(""); const [confirmation, setConfirmation] = useState("");

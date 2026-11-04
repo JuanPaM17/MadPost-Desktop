@@ -216,10 +216,17 @@ const migrations = [
   "CREATE INDEX IF NOT EXISTS idx_audit_log_items_audit ON audit_log_items(audit_id)",
 ];
 
+const PROD_DB = "sqlite:madpost.db";
+const DEMO_DB = "sqlite:madpost_demo.db";
+const DEMO_DB_FILENAME = "madpost_demo.db";
+
 class DatabaseManager {
   private databasePromise: Promise<SqliteDatabase> | null = null;
   private secondaryPromise: Promise<SqliteDatabase> | null = null;
   private _dualWriteEnabled = false;
+  private _demoMode = false;
+
+  isDemoMode() { return this._demoMode; }
 
   enableDualWrite() { this._dualWriteEnabled = true; }
   disableDualWrite() { this._dualWriteEnabled = false; this.secondaryPromise = null; }
@@ -233,9 +240,64 @@ class DatabaseManager {
     }
   }
 
+  /**
+   * Copia madpost.db -> madpost_demo.db y abre la copia como DB activa.
+   * Debe llamarse antes de iniciar la sesion demo.
+   */
+  async switchToDemoDb(): Promise<void> {
+    const { copyFile, exists, remove, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    // Forzar checkpoint WAL para que todos los datos pendientes queden en madpost.db antes de copiar
+    if (this.databasePromise) {
+      const db = await this.databasePromise.catch(() => null);
+      if (db) await db.execute("PRAGMA wal_checkpoint(TRUNCATE)").catch(() => {});
+    }
+    try {
+      if (await exists(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData })) {
+        await remove(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData });
+      }
+    } catch { /* archivo no existe, ignorar */ }
+    await copyFile("madpost.db", DEMO_DB_FILENAME, {
+      fromPathBaseDir: BaseDirectory.AppData,
+      toPathBaseDir: BaseDirectory.AppData,
+    });
+    await this.resetPrimary();
+    this._demoMode = true;
+    this.databasePromise = this.openAndMigrate(DEMO_DB);
+    await this.databasePromise;
+  }
+
+  /**
+   * Cierra madpost_demo.db, la elimina y vuelve a madpost.db.
+   * Debe llamarse al hacer logout del usuario demo.
+   */
+  async switchToProductionDb(): Promise<void> {
+    await this.resetPrimary();
+    this._demoMode = false;
+    const { exists, remove, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    try {
+      if (await exists(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData })) {
+        await remove(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData });
+      }
+    } catch { /* ignorar si no existe */ }
+    this.databasePromise = this.openAndMigrate(PROD_DB);
+    await this.databasePromise;
+  }
+
+  /**
+   * Limpieza de arranque: si quedo una demo DB huerfana de un crash anterior, la borra.
+   */
+  async cleanupOrphanDemoDb(): Promise<void> {
+    const { exists, remove, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    try {
+      if (await exists(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData })) {
+        await remove(DEMO_DB_FILENAME, { baseDir: BaseDirectory.AppData });
+      }
+    } catch { /* ignorar si no existe */ }
+  }
+
   async database(): Promise<SqliteDatabase> {
     if (!this.databasePromise) {
-      this.databasePromise = this.openAndMigrate("sqlite:madpost.db");
+      this.databasePromise = this.openAndMigrate(PROD_DB);
     }
     const primary = await this.databasePromise;
     if (!this._dualWriteEnabled) return primary;
@@ -285,6 +347,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "table_orders", "comanda_sent", "INTEGER");
     await this.ensureColumn(database, "table_order_items", "updated_at", "TEXT");
     await this.ensureColumn(database, "tenants", "react_migrated", "INTEGER NOT NULL DEFAULT 0");
+    await this.ensureColumn(database, "licenses_cache", "device_blocked", "INTEGER NOT NULL DEFAULT 0");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     await this.dropRoleCheckConstraint(database);
     return database;
