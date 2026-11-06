@@ -153,6 +153,25 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.6.0 — Mesas mejoradas, busqueda sin tildes y pre-ticket por impresora
+
+**Nuevo:**
+- El editor de mesas ahora permite agregar paredes y elementos decorativos para que el plano se vea igual que tu salon real. Puedes darle el color que quieras a cada pared.
+- Seleccion multiple en el editor: arrastra el cursor sobre el plano para encuadrar varias mesas o paredes al mismo tiempo, moverlas juntas o eliminarlas de un solo clic derecho.
+- Los vendedores con acceso al modulo de mesas ahora pueden editar el plano, ya no es exclusivo del administrador.
+
+**Mejorado:**
+- El buscador de productos y combos ahora encuentra resultados aunque escribas sin tildes o con letras diferentes. Por ejemplo, escribir "cafe" encuentra "Cafe" sin problema.
+- Los combos ahora aparecen al inicio de la lista de categorias, igual en el punto de venta que en las mesas.
+- Compartir por WhatsApp ya no requiere tener un numero registrado en la app. Abre directamente WhatsApp para que tu elijas a quien enviarselo.
+- El pre-ticket ahora se imprime directamente en la impresora termica. Ya no genera un archivo PDF.
+- El pre-ticket ahora muestra el precio por unidad de cada producto y el valor del domicilio cuando aplica.
+- Las notas que escribes en el detalle de una mesa ahora llegan correctamente a la comanda de cocina y al cobro. Antes se podian perder en algunos casos.
+- Ahora puedes ajustar la cantidad de un producto desde el detalle de la mesa tanto para subir como para bajar sin tener que eliminarlo.
+- Cambiar el tipo de entrega de una mesa (domicilio o para llevar) ahora actualiza la comanda de cocina automaticamente.
+
+---
+
 ### v1.5.0 — Modo prueba, ayuda por pantalla y auditorias completas
 
 **Nuevo:**

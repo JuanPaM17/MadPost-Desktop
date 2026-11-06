@@ -8,6 +8,7 @@ import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { Tip } from "../../components/ui/Tip";
 import { businessConfigService, printerService } from "../config/BusinessConfigService";
 import { notify } from "../../components/ui/AppToaster";
+import { setDevReceiptPreviewCallback } from "../pos/SaleService";
 import { invoke } from "@tauri-apps/api/core";
 import { BaseDirectory, exists } from "@tauri-apps/plugin-fs";
 
@@ -485,10 +486,17 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
   const [bizConfig, setBizConfig] = useState<{ phone: string; printerReceipt: string; name: string; address: string; taxId: string; invoiceFooter: string; logoPath: string | null } | null>(null);
   const [hasPrinter, setHasPrinter] = useState(false);
   const [hasPhone, setHasPhone] = useState(false);
+  const [printBusy, setPrintBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [devReceiptLines, setDevReceiptLines] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    setDevReceiptPreviewCallback((lines) => setDevReceiptLines(lines));
+  }, []);
 
   useEffect(() => {
     void Promise.all([businessConfigService.load(), printerService.list()]).then(([cfg, printers]) => {
@@ -505,7 +513,7 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
 
   async function handlePrint() {
     if (!sale || !bizConfig) return;
-    setPdfBusy(true);
+    setPrintBusy(true);
     try {
       const { saleService } = await import("../pos/SaleService");
       const { req, allAdditions, allSauces } = buildSaleRequest(detail!);
@@ -520,9 +528,9 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
         { attendedBy: sale.attended_by ?? undefined, collectedBy: sale.collected_by ?? undefined, clientName: sale.client_name },
       );
     } catch (e) {
-      notify.error("No fue posible generar el PDF.", e instanceof Error ? e.message : undefined);
+      notify.error("No fue posible imprimir.", e instanceof Error ? e.message : undefined);
     } finally {
-      setPdfBusy(false);
+      setPrintBusy(false);
     }
   }
 
@@ -561,10 +569,10 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
   }
 
   async function handleWhatsApp() {
-    if (!sale || !bizConfig?.phone) return;
+    if (!sale || !bizConfig) return;
     const { saleService } = await import("../pos/SaleService");
     const { req, allAdditions, allSauces } = buildSaleRequest(detail!);
-    const url = saleService.buildWhatsAppUrl(bizConfig.phone, bizConfig.name, sale.invoice_number, req, allAdditions, allSauces, sale.client_name);
+    const url = saleService.buildWhatsAppUrl(bizConfig.name, sale.invoice_number, req, allAdditions, allSauces, sale.client_name);
     void invoke("open_help_url", { url }).catch(() => window.open(url, "_blank"));
   }
 
@@ -859,8 +867,8 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
           <Separator my="4" />
           <Grid templateColumns="1fr 1fr" gap="2">
             {/* Reimprimir */}
-            <Tip text={hasPrinter ? "Imprimir ticket en caja" : "Sin impresora de caja configurada"}>
-              <Button size="sm" variant="outline" w="full" disabled={!hasPrinter || pdfBusy} loading={pdfBusy} onClick={() => void handlePrint()}>
+            <Tip text={hasPrinter || import.meta.env.DEV ? "Imprimir ticket en caja" : "Sin impresora de caja configurada"}>
+              <Button size="sm" variant="outline" w="full" disabled={(!hasPrinter && !import.meta.env.DEV) || printBusy} loading={printBusy} onClick={() => void handlePrint()}>
                 <Printer size={15} />Imprimir
               </Button>
             </Tip>
@@ -871,19 +879,13 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
             </Button>
 
             {/* WhatsApp */}
-            <Tip text={hasPhone ? "Enviar detalle por WhatsApp" : "Sin telefono valido configurado"}>
-              <Button
-                size="sm" w="full"
-                bg={hasPhone ? "#25d366" : undefined}
-                color={hasPhone ? "white" : undefined}
-                variant={hasPhone ? "solid" : "outline"}
-                opacity={hasPhone ? 1 : 0.45}
-                disabled={!hasPhone}
-                onClick={() => void handleWhatsApp()}
-              >
-                <MessageCircle size={15} />WhatsApp
-              </Button>
-            </Tip>
+            <Button
+              size="sm" w="full"
+              bg="#25d366" color="white" variant="solid"
+              onClick={() => void handleWhatsApp()}
+            >
+              <MessageCircle size={15} />WhatsApp
+            </Button>
 
             {/* Editar Venta */}
             <Button size="sm" variant="outline" colorPalette="purple" w="full" onClick={() => setEditOpen(true)}>
@@ -922,6 +924,23 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
           </> : null}
         </Box>
         </Box>
+      )}
+
+      {import.meta.env.DEV && devReceiptLines && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="420px" bg="white" borderRadius="md" boxShadow="2xl" overflow="hidden">
+            <Flex px="4" py="3" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between">
+              <Flex align="center" gap="2"><Printer size={16} /><Text fontWeight="bold" fontSize="sm">Preview Recibo (DEV)</Text></Flex>
+              <Button size="xs" variant="ghost" onClick={() => setDevReceiptLines(null)}><X size={14} /></Button>
+            </Flex>
+            <Box as="pre" fontFamily="monospace" fontSize="12px" lineHeight="1.6" p="4" bg="gray.50" overflowY="auto" maxH="60vh" whiteSpace="pre-wrap">
+              {devReceiptLines.join("\n")}
+            </Box>
+            <Flex px="4" py="3" justify="end" borderTopWidth="1px" borderColor="gray.200">
+              <Button size="sm" onClick={() => setDevReceiptLines(null)}>Cerrar</Button>
+            </Flex>
+          </Box>
+        </Flex>
       )}
     </Flex>
   );

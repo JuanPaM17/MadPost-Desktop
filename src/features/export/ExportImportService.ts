@@ -63,6 +63,7 @@ export async function exportProductos(): Promise<boolean> {
       `SELECT name AS Nombre, CAST(floor AS INTEGER) AS Piso,
               shape AS Forma, width AS Ancho, height AS Alto,
               pos_x AS Pos_X, pos_y AS Pos_Y, type AS Tipo,
+              color AS Color,
               CASE WHEN active=1 THEN 'Si' ELSE 'No' END AS Activo
        FROM restaurant_tables WHERE tenant_id=$1 ORDER BY floor, name COLLATE NOCASE`, [tid]),
   ]);
@@ -463,16 +464,17 @@ export async function importProductos(): Promise<ImportResult | null> {
       const alto = numOrNull(row["Alto"]) ?? 80;
       const posX = numOrNull(row["Pos_X"]) ?? 50;
       const posY = numOrNull(row["Pos_Y"]) ?? 50;
-      const tipo = row["Tipo"]?.toString().toUpperCase() === "DECORATION" ? "DECORATION" : "TABLE";
+      const tipo = row["Tipo"]?.toString().toUpperCase() === "WALL" ? "WALL" : "TABLE";
+      const color = row["Color"]?.toString().trim() || null;
       const active = row["Activo"]?.toString().toLowerCase() !== "no" ? 1 : 0;
       const existing = await db.select<{ id: string }[]>("SELECT id FROM restaurant_tables WHERE tenant_id=$1 AND LOWER(name)=LOWER($2) AND CAST(floor AS INTEGER)=$3", [tid, name, piso]);
       if (existing[0]) {
-        await db.execute("UPDATE restaurant_tables SET shape=$1,width=$2,height=$3,pos_x=$4,pos_y=$5,type=$6,active=$7,updated_at=$8 WHERE id=$9",
-          [forma, ancho, alto, posX, posY, tipo, active, now, existing[0].id]);
+        await db.execute("UPDATE restaurant_tables SET shape=$1,width=$2,height=$3,pos_x=$4,pos_y=$5,type=$6,color=$7,active=$8,updated_at=$9 WHERE id=$10",
+          [forma, ancho, alto, posX, posY, tipo, color, active, now, existing[0].id]);
         updated++;
       } else {
-        await db.execute("INSERT INTO restaurant_tables(id,tenant_id,name,shape,width,height,pos_x,pos_y,type,floor,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)",
-          [crypto.randomUUID(), tid, name, forma, ancho, alto, posX, posY, tipo, piso, active, now]);
+        await db.execute("INSERT INTO restaurant_tables(id,tenant_id,name,shape,width,height,pos_x,pos_y,type,floor,active,color,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)",
+          [crypto.randomUUID(), tid, name, forma, ancho, alto, posX, posY, tipo, piso, active, color, now]);
         created++;
       }
     } catch (e) { errors.push(`Mesa '${name}': ${String(e)}`); }

@@ -13,6 +13,7 @@ export type RestaurantTable = {
   type: "TABLE" | "WALL";
   floor: number;
   active: number;
+  color: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -24,7 +25,7 @@ export const tablesService = {
   async listByFloor(tenantId: string, floor: number): Promise<RestaurantTable[]> {
     const db = await databaseManager.database();
     return db.select<RestaurantTable[]>(
-      "SELECT id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, created_at, updated_at FROM restaurant_tables WHERE tenant_id = $1 AND floor = $2 AND active = 1",
+      "SELECT id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, color, created_at, updated_at FROM restaurant_tables WHERE tenant_id = $1 AND floor = $2 AND active = 1",
       [tenantId, floor],
     );
   },
@@ -32,7 +33,7 @@ export const tablesService = {
   async listAllTables(tenantId: string): Promise<RestaurantTable[]> {
     const db = await databaseManager.database();
     return db.select<RestaurantTable[]>(
-      "SELECT id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, created_at, updated_at FROM restaurant_tables WHERE tenant_id = $1 AND type = 'TABLE' AND active = 1 ORDER BY floor ASC, name ASC",
+      "SELECT id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, color, created_at, updated_at FROM restaurant_tables WHERE tenant_id = $1 AND type = 'TABLE' AND active = 1 ORDER BY floor ASC, name ASC",
       [tenantId],
     );
   },
@@ -46,13 +47,13 @@ export const tablesService = {
     return rows.map((r) => r.floor);
   },
 
-  async create(tenantId: string, data: Omit<RestaurantTable, "id" | "tenant_id" | "created_at" | "updated_at" | "active">): Promise<RestaurantTable> {
+  async create(tenantId: string, data: Omit<RestaurantTable, "id" | "tenant_id" | "created_at" | "updated_at" | "active"> & { color?: string | null }): Promise<RestaurantTable> {
     const db = await databaseManager.database();
     const now = instantNow();
     const id = uuid();
     await db.execute(
-      "INSERT INTO restaurant_tables(id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$11)",
-      [id, tenantId, data.name, data.shape, data.width, data.height, data.pos_x, data.pos_y, data.type, data.floor, now],
+      "INSERT INTO restaurant_tables(id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, color, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,$12)",
+      [id, tenantId, data.name, data.shape, data.width, data.height, data.pos_x, data.pos_y, data.type, data.floor, data.color ?? null, now],
     );
     return { id, tenant_id: tenantId, active: 1, created_at: now, updated_at: now, ...data };
   },
@@ -61,8 +62,8 @@ export const tablesService = {
     const db = await databaseManager.database();
     const now = instantNow();
     await db.execute(
-      "UPDATE restaurant_tables SET name=$1, shape=$2, width=$3, height=$4, pos_x=$5, pos_y=$6, type=$7, floor=$8, updated_at=$9 WHERE id=$10",
-      [table.name, table.shape, table.width, table.height, table.pos_x, table.pos_y, table.type, table.floor, now, table.id],
+      "UPDATE restaurant_tables SET name=$1, shape=$2, width=$3, height=$4, pos_x=$5, pos_y=$6, type=$7, floor=$8, color=$9, updated_at=$10 WHERE id=$11",
+      [table.name, table.shape, table.width, table.height, table.pos_x, table.pos_y, table.type, table.floor, table.color ?? null, now, table.id],
     );
   },
 
@@ -92,6 +93,7 @@ export const tablesService = {
       pos_y: merged.pos_y,
       type: merged.type,
       floor: merged.floor,
+      color: merged.color ?? null,
     });
   },
 
@@ -105,8 +107,8 @@ export const tablesService = {
     for (const row of rows) {
       const newId = uuid();
       await db.execute(
-        "INSERT INTO restaurant_tables(id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$11)",
-        [newId, tenantId, row.name, row.shape, row.width, row.height, row.pos_x, row.pos_y, row.type, toFloor, now],
+        "INSERT INTO restaurant_tables(id, tenant_id, name, shape, width, height, pos_x, pos_y, type, floor, active, color, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,$12)",
+        [newId, tenantId, row.name, row.shape, row.width, row.height, row.pos_x, row.pos_y, row.type, toFloor, row.color ?? null, now],
       );
     }
   },

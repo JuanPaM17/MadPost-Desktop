@@ -11,6 +11,14 @@ import type { DeliveryType } from "../config/BusinessConfigService";
 import type { PosAddition, PosSauce } from "./PosService";
 
 // ---------------------------------------------------------------------------
+// DEV preview callback (receipt / pre-ticket)
+// ---------------------------------------------------------------------------
+let devReceiptPreviewCallback: ((lines: string[]) => void) | undefined;
+export function setDevReceiptPreviewCallback(cb: (lines: string[]) => void) {
+  devReceiptPreviewCallback = cb;
+}
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -445,7 +453,7 @@ class SaleService {
     result: SaleResult,
     req: SaleRequest,
     sessionNumber: number,
-    bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string; logoPath: string | null },
+    bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string; logoPath: string | null; printerReceipt?: string },
     allAdditions: PosAddition[],
     allSauces: PosSauce[],
     openFile = true,
@@ -660,9 +668,14 @@ class SaleService {
     await writeFile(`${folder}/${fileName}`, uint8, { baseDir: BaseDirectory.AppData });
 
     if (openFile) {
-      try {
-        await invoke("save_and_open_invoice_pdf", { sessionNumber, fileName, bytes: Array.from(uint8) });
-      } catch { /* Non-fatal: archivo ya guardado */ }
+      const lines = buildReceiptLines(result, req, sessionNumber, bizSettings, allAdditions, allSauces, userName, collectedBy, clientName);
+      if (import.meta.env.DEV) {
+        devReceiptPreviewCallback?.(lines);
+      } else {
+        try {
+          await invoke("print_comanda", { printerName: bizSettings.printerReceipt, lines });
+        } catch { /* non-fatal */ }
+      }
     }
   }
 
@@ -670,131 +683,72 @@ class SaleService {
     items: import("../tables/TableOrderService").TableOrderItem[],
     total: number,
     tableName: string,
-    bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string; logoPath: string | null },
+    bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string; printerReceipt?: string },
     allAdditions: PosAddition[],
     allSauces: PosSauce[],
+    orderNote?: string | null,
+    deliveryLines?: { label: string; price: number }[],
   ): Promise<void> {
-    const PT_WIDTH = 164;
-    const MARGIN = 8;
-    const CONTENT_WIDTH = PT_WIDTH - MARGIN * 2;
-    const LINE_H = 9;
-    const DIVIDER = "--------------------------------";
+    const D = "--------------------------------";
+    const lines: string[] = [];
 
-    const render = async (doc: jsPDF) => {
-      let y = MARGIN + 4;
+    if (bizSettings.name) lines.push(bizSettings.name);
+    if (bizSettings.address) lines.push(bizSettings.address);
+    if (bizSettings.phone) lines.push(`Tel: ${bizSettings.phone}`);
+    lines.push(D);
 
-      const setStyle = (size: number, bold: boolean) => {
-        doc.setFontSize(size);
-        doc.setFont("helvetica", bold ? "bold" : "normal");
-      };
-      const centerText = (text: string, size: number, bold = false) => {
-        setStyle(size, bold);
-        doc.text(text, PT_WIDTH / 2, y, { align: "center" });
-        y += LINE_H;
-      };
-      const leftText = (text: string, size = 7, bold = false) => {
-        setStyle(size, bold);
-        const lines = doc.splitTextToSize(text, CONTENT_WIDTH) as string[];
-        doc.text(lines, MARGIN, y);
-        y += LINE_H * lines.length;
-      };
-      const rowText = (leftStr: string, rightStr: string, size = 7, bold = false) => {
-        setStyle(size, bold);
-        const maxLeft = CONTENT_WIDTH - doc.getTextWidth(rightStr) - 2;
-        const truncated = doc.splitTextToSize(leftStr, maxLeft)[0] as string;
-        doc.text(truncated, MARGIN, y);
-        if (rightStr) doc.text(rightStr, PT_WIDTH - MARGIN, y, { align: "right" });
-        y += LINE_H;
-      };
-      const divider = () => { leftText(DIVIDER, 7, false); };
-      const gap = (pt = 3) => { y += pt; };
+    const dateStr = new Intl.DateTimeFormat("es-CO", {
+      timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+    }).format(new Date());
+    lines.push("CUENTA");
+    lines.push(`Mesa:  ${tableName}`);
+    lines.push(`Fecha: ${dateStr}`);
+    lines.push(D);
 
-      // Logo
-      if (bizSettings.logoPath) {
-        try {
-          const logoBytes = await readFile(bizSettings.logoPath);
-          const base64 = btoa(String.fromCharCode(...logoBytes));
-          const ext = bizSettings.logoPath.split(".").pop()?.toLowerCase() ?? "png";
-          const mime = ext === "jpg" || ext === "jpeg" ? "JPEG" : "PNG";
-          const MAX_W = 120;
-          doc.addImage(`data:image/${mime.toLowerCase()};base64,${base64}`, mime, (PT_WIDTH - MAX_W) / 2, y, MAX_W, 0);
-          y += 34;
-          gap(2);
-        } catch { /* logo opcional */ }
+    if (orderNote) { lines.push(`Nota: ${orderNote}`); lines.push(D); }
+
+    const rootItems = items.filter((i) => !i.combo_table_order_item_id);
+    for (const item of rootItems) {
+      lines.push(`${item.quantity}x ${item.product_name}  ${money(item.unit_price * item.quantity)}`);
+      if (item.unit_price !== (item.original_unit_price ?? item.unit_price)) {
+        lines.push(`   Precio original: ${money((item.original_unit_price ?? item.unit_price) * item.quantity)}`);
       }
-
-      // Encabezado
-      if (bizSettings.name) centerText(bizSettings.name, 11, true);
-      if (bizSettings.address) centerText(bizSettings.address, 7);
-      if (bizSettings.phone) centerText(`Tel: ${bizSettings.phone}`, 7);
-      divider();
-
-      // Meta
-      const dateStr = new Intl.DateTimeFormat("es-CO", {
-        timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric",
-        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
-      }).format(new Date());
-      centerText("CUENTA", 10, true);
-      leftText(`Mesa:  ${tableName}`);
-      leftText(`Fecha: ${dateStr}`);
-      divider();
-
-      // Items (solo root items)
-      const rootItems = items.filter((i) => !i.combo_table_order_item_id);
-      for (const item of rootItems) {
-        rowText(`${item.quantity}x ${item.product_name}`, money(item.subtotal), 7, true);
-        if (item.unit_price !== (item.original_unit_price ?? item.unit_price)) {
-          leftText(`   Precio original: ${money((item.original_unit_price ?? item.unit_price) * item.quantity)}`);
-        }
-        if (item.selected_option) leftText(`   >> ${item.selected_option}`);
-        for (const add of item.additions) {
+      if (item.selected_option) lines.push(`   >> ${item.selected_option}`);
+      for (const add of item.additions) {
+        if (add.quantity <= 0) continue;
+        lines.push(`   + ${add.quantity > 1 ? `${add.quantity}x ` : ""}${add.name}${add.price > 0 ? `  +${money(add.price * add.quantity)}` : ""}`);
+      }
+      if (item.sauces.length > 0) lines.push(`   Salsas: ${item.sauces.map((s) => s.name).join(", ")}`);
+      if (item.notes) lines.push(`   Nota: ${item.notes}`);
+      const children = items.filter((c) => c.combo_table_order_item_id === item.id);
+      for (const child of children) {
+        lines.push(`  - ${child.quantity > 1 ? `${child.quantity}x ` : ""}${child.product_name}`);
+        if (child.selected_option) lines.push(`      >> ${child.selected_option}`);
+        for (const add of child.additions) {
           if (add.quantity <= 0) continue;
-          const label = add.quantity > 1 ? `   + ${add.quantity}x ${add.name}` : `   + ${add.name}`;
-          rowText(label, add.price > 0 ? `+${money(add.price * add.quantity)}` : "");
+          lines.push(`      + ${add.quantity > 1 ? `${add.quantity}x ` : ""}${add.name}${add.price > 0 ? `  +${money(add.price * add.quantity)}` : ""}`);
         }
-        if (item.sauces.length > 0) {
-          leftText(`   Salsas: ${item.sauces.map((s) => s.name).join(", ")}`);
-        }
-        if (item.notes) leftText(`   Nota: ${item.notes}`);
-        // Hijos de combo
-        const children = items.filter((c) => c.combo_table_order_item_id === item.id);
-        for (const child of children) {
-          leftText(`  - ${child.quantity > 1 ? `${child.quantity}x ` : ""}${child.product_name}`);
-          if (child.selected_option) leftText(`      >> ${child.selected_option}`);
-          for (const add of child.additions) {
-            if (add.quantity <= 0) continue;
-            rowText(`      + ${add.quantity > 1 ? `${add.quantity}x ` : ""}${add.name}`, add.price > 0 ? `+${money(add.price * add.quantity)}` : "");
-          }
-          if (child.sauces.length > 0) {
-            leftText(`      Salsas: ${child.sauces.map((s) => s.name).join(", ")}`);
-          }
-        }
+        if (child.sauces.length > 0) lines.push(`      Salsas: ${child.sauces.map((s) => s.name).join(", ")}`);
       }
+    }
 
-      // Total
-      divider();
-      rowText("TOTAL", money(total), 11, true);
-      gap(2);
+    if (deliveryLines && deliveryLines.length > 0) {
+      for (const dl of deliveryLines) lines.push(`${dl.label}  ${money(dl.price)}`);
+    }
 
-      // Pie
-      divider();
-      centerText(bizSettings.invoiceFooter || "Gracias por su compra!", 7);
-      gap(LINE_H * 4);
+    lines.push(D);
+    lines.push(`TOTAL  ${money(total)}`);
+    lines.push(D);
+    lines.push(bizSettings.invoiceFooter || "Gracias por su compra!");
 
-      return y;
-    };
-
-    const measDoc = new jsPDF({ unit: "pt", format: [PT_WIDTH, 2000], orientation: "portrait" });
-    const finalY = await render(measDoc);
-    const pageHeight = finalY + MARGIN;
-
-    const doc = new jsPDF({ unit: "pt", format: [PT_WIDTH, pageHeight], orientation: "portrait" });
-    await render(doc);
-
-    const uint8 = new Uint8Array(doc.output("arraybuffer"));
-    try {
-      await invoke("save_and_open_invoice_pdf", { sessionNumber: 0, fileName: `preticket-${tableName}.pdf`, bytes: Array.from(uint8) });
-    } catch { /* non-fatal */ }
+    if (import.meta.env.DEV) {
+      devReceiptPreviewCallback?.(lines);
+    } else {
+      try {
+        await invoke("print_comanda", { printerName: bizSettings.printerReceipt ?? "", lines });
+      } catch { /* non-fatal */ }
+    }
   }
 
   normalizeWhatsAppPhone(phone: string): string | null {
@@ -805,7 +759,6 @@ class SaleService {
   }
 
   buildWhatsAppUrl(
-    phone: string,
     businessName: string,
     invoiceNumber: string,
     req: SaleRequest,
@@ -813,8 +766,6 @@ class SaleService {
     allSauces: PosSauce[],
     clientName?: string | null,
   ): string {
-    const normalized = this.normalizeWhatsAppPhone(phone) ?? phone.replace(/\D/g, "");
-
     const lines: string[] = [`*${businessName}*`];
     if (req.delivery) lines.push("*Pedido Domicilio*");
     lines.push(`Factura #${invoiceNumber}`);
@@ -864,7 +815,7 @@ class SaleService {
     }
     if (req.notes) lines.push(`Notas: ${req.notes}`);
 
-    return `https://wa.me/${normalized}?text=${encodeURIComponent(lines.join("\n"))}`;
+    return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
   }
 }
 
@@ -910,6 +861,109 @@ async function qrToDataUrl(text: string, size: number): Promise<string> {
       }
     }, 500);
   });
+}
+
+function buildReceiptLines(
+  result: SaleResult,
+  req: SaleRequest,
+  sessionNumber: number,
+  bizSettings: { name: string; address: string; phone: string; taxId: string; invoiceFooter: string },
+  allAdditions: PosAddition[],
+  allSauces: PosSauce[],
+  userName: string,
+  collectedBy: string,
+  clientName: string | null,
+): string[] {
+  const D = "--------------------------------";
+  const lines: string[] = [];
+
+  if (bizSettings.name) lines.push(bizSettings.name);
+  if (bizSettings.address) lines.push(bizSettings.address);
+  if (bizSettings.phone) lines.push(`Tel: ${bizSettings.phone}`);
+  if (bizSettings.taxId) lines.push(`NIT: ${bizSettings.taxId}`);
+  lines.push(D);
+
+  const dateStr = new Intl.DateTimeFormat("es-CO", {
+    timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+  }).format(new Date());
+  lines.push(`Factura #: ${result.invoiceNumber}`);
+  lines.push(`Fecha:     ${dateStr}`);
+  lines.push(`Atendido:  ${userName}`);
+  lines.push(`Cobrado:   ${collectedBy}`);
+  lines.push(`Caja #${sessionNumber}`);
+  if (clientName) lines.push(`Cliente:   ${clientName}`);
+  lines.push(D);
+
+  type GroupKey = string;
+  type Group = { item: SaleItemRequest; quantity: number };
+  const groups = new Map<GroupKey, Group>();
+  for (const item of req.items) {
+    let key: GroupKey;
+    if (item.kind === "combo") {
+      key = `combo|${item.key}`;
+    } else {
+      const addKey = Object.entries(item.additions).filter(([, q]) => q > 0).sort(([a], [b]) => a.localeCompare(b)).map(([id, q]) => `${id}:${q}`).join(",");
+      key = `${item.productId}|${item.selectedOption ?? ""}|${addKey}`;
+    }
+    const existing = groups.get(key);
+    if (existing) existing.quantity += item.quantity;
+    else groups.set(key, { item, quantity: item.quantity });
+  }
+
+  for (const { item, quantity } of groups.values()) {
+    const itemTotal = item.price * quantity;
+    lines.push(`${quantity}x ${item.name}  ${money(itemTotal)}`);
+    if (item.kind === "product" && item.price !== item.originalPrice) lines.push(`   Precio original: ${money(item.originalPrice)}`);
+    if (item.selectedOption) lines.push(`   >> ${item.selectedOption}`);
+    for (const [addId, qty] of Object.entries(item.additions)) {
+      if (qty <= 0) continue;
+      const addition = allAdditions.find((a) => a.id === addId);
+      if (!addition) continue;
+      lines.push(`   + ${qty > 1 ? `${qty}x ` : ""}${addition.name}${addition.price > 0 ? `  +${money(addition.price * qty)}` : ""}`);
+    }
+    if (item.sauces.length > 0) {
+      const names = item.sauces.map((id) => allSauces.find((s) => s.id === id)?.name ?? "").filter(Boolean);
+      if (names.length) lines.push(`   Salsas: ${names.join(", ")}`);
+    }
+    if (item.note) lines.push(`   Nota: ${item.note}`);
+    for (const child of item.children) {
+      lines.push(`  - ${child.quantity > 1 ? `${child.quantity}x ` : ""}${child.name}`);
+      if (child.selectedOption) lines.push(`      >> ${child.selectedOption}`);
+      for (const [addId, qty] of Object.entries(child.additions)) {
+        if (qty <= 0) continue;
+        const addition = allAdditions.find((a) => a.id === addId);
+        if (!addition) continue;
+        lines.push(`      + ${qty > 1 ? `${qty}x ` : ""}${addition.name}${addition.price > 0 ? `  +${money(addition.price * qty)}` : ""}`);
+      }
+      if (child.sauces.length > 0) {
+        const names = child.sauces.map((id) => allSauces.find((s) => s.id === id)?.name ?? "").filter(Boolean);
+        if (names.length) lines.push(`      Salsas: ${names.join(", ")}`);
+      }
+    }
+  }
+
+  lines.push(D);
+  lines.push(`TOTAL  ${money(req.total)}`);
+  lines.push(`Pago:      ${payLabel(req.paymentMethod)}`);
+  if (req.paymentMethod === "SPLIT") {
+    lines.push(`  Efectivo: ${money(req.cashAmount ?? 0)}`);
+    lines.push(`  Tarjeta:  ${money(req.cardAmount ?? 0)}`);
+  }
+  if (req.cashGiven != null) {
+    lines.push(`Recibido:  ${money(req.cashGiven)}`);
+    lines.push(`Cambio:    ${money(req.changeGiven ?? 0)}`);
+  }
+  if (req.delivery) {
+    lines.push("*** DOMICILIO ***");
+    if (req.delivery.type.price > 0) lines.push(`Precio domicilio: ${money(req.delivery.type.price)}`);
+    lines.push(`Pago domicilio:  ${payLabel(req.delivery.paymentMethod)}`);
+  }
+  if (req.notes) lines.push(`Nota: ${req.notes}`);
+  lines.push(D);
+  lines.push(bizSettings.invoiceFooter || "Gracias por su compra!");
+
+  return lines;
 }
 
 function money(value: number) {

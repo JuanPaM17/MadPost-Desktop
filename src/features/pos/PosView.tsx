@@ -73,6 +73,7 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
       }
     } finally { setLoading(false); }
   }, []);
+  const [allCombos, setAllCombos] = useState<PosCombo[]>([]);
   useEffect(() => {
     if (!active) return;
     void Promise.all([posService.categories(), posService.products(null), posService.combos()])
@@ -80,6 +81,7 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
         const activeIds = new Set(prods.map((p) => p.categoryId).filter(Boolean));
         setCategories(cats.filter((c) => activeIds.has(c.id)));
         setHasActiveCombos(combosResult.length > 0);
+        setAllCombos(combosResult);
       })
       .catch(() => { setCategories([]); setHasActiveCombos(false); });
   }, [active]);
@@ -87,7 +89,7 @@ function PosWorkspace({ cash, active }: { cash: CashSession; active: boolean }) 
   useEffect(() => { if (active) void posService.sauces().then(({ items, max }) => { setSauces(items); setMaxSauces(max); }).catch(() => {}); }, [active]);
   useEffect(() => { if (active) void loadItems(selected); }, [active, loadItems, selected]);
   const productItems = useMemo(() => filterItems(products, search), [products, search]);
-  const comboItems = useMemo(() => filterItems(combos, search), [combos, search]);
+  const comboItems = useMemo(() => filterItems(search.trim() ? allCombos : combos, search), [allCombos, combos, search]);
   const cartTotal = cart.reduce((total, item) => total + (item.price + itemExtras(item, additions)) * item.quantity, 0);
   function add(item: PosGridItem) {
     const groupable = item.kind === "combo"
@@ -382,7 +384,7 @@ function CheckoutModal({ cash, items, additions, sauces, subtotal, deliveryTypes
               if (bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
                 const shouldSend = bizSettings.deliveryWhatsapp === "TODAS" || (bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" && !!selectedDelivery);
                 if (shouldSend) {
-                  try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.phone, bizSettings.name, result.invoiceNumber, req, additions, sauces) }); } catch { /* non-fatal */ }
+                  try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.name, result.invoiceNumber, req, additions, sauces) }); } catch { /* non-fatal */ }
                 }
               }
               // Cajon (efectivo o dividido)

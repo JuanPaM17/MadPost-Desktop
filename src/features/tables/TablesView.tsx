@@ -14,6 +14,7 @@ import { auditService } from "../audit/AuditService";
 import { Tip } from "../../components/ui/Tip";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
 import { comandaService, setDevComandaPreviewCallback } from "./ComandaService";
+import { setDevReceiptPreviewCallback } from "../pos/SaleService";
 
 function formatClock(date: Date): string {
   const day = date.toLocaleDateString("es-CO", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -301,7 +302,7 @@ function TableShape({ table, status, order, info, selected, editMode }: {
     return () => window.clearInterval(t);
   }, [order?.id]);
 
-  const color = table.type === "WALL" ? "#d1d5db" : STATUS_COLORS[status];
+  const color = table.type === "WALL" ? (table.color ?? "#d1d5db") : STATUS_COLORS[status];
   const isRound = table.shape === "ROUND";
   const isOccupied = status !== "free";
   const small = table.width < 90 || table.height < 90;
@@ -371,8 +372,11 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   const [currentFloor, setCurrentFloor] = useState(1);
   const [editMode, setEditMode] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [nameModal, setNameModal] = useState<NameModal | null>(null);
+  const [wallColorModal, setWallColorModal] = useState<{ table: RestaurantTable; color: string } | null>(null);
   const [confirmModal, setConfirmModal] = useState<ConfirmModal | null>(null);
   const [cloneFloorConfirm, setCloneFloorConfirm] = useState(false);
   const [panelTable, setPanelTable] = useState<RestaurantTable | null>(null);
@@ -386,6 +390,8 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; startMouseX: number; startMouseY: number; startPosX: number; startPosY: number } | null>(null);
   const resizeRef = useRef<{ id: string; edge: "nw" | "ne" | "sw" | "se"; startMouseX: number; startMouseY: number; startW: number; startH: number; startPosX: number; startPosY: number } | null>(null);
+  const groupDragRef = useRef<{ ids: string[]; startMouseX: number; startMouseY: number; startPositions: Record<string, { x: number; y: number }> } | null>(null);
+  const marqueeRef = useRef<{ startCanvasX: number; startCanvasY: number; scrollLeft: number; scrollTop: number } | null>(null);
 
   const loadTables = useCallback(async () => {
     try {
@@ -436,21 +442,72 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
     return () => document.removeEventListener("pointerdown", handler, true);
   }, [contextMenu]);
 
+  function getCanvasCoords(clientX: number, clientY: number): { cx: number; cy: number } {
+    const wrapper = canvasRef.current?.parentElement;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || !wrapper) return { cx: clientX, cy: clientY };
+    const scrollLeft = wrapper.scrollLeft;
+    const scrollTop = wrapper.scrollTop;
+    return { cx: clientX - rect.left + scrollLeft, cy: clientY - rect.top + scrollTop };
+  }
+
+  function computeMarqueeSelectedIds(x1: number, y1: number, x2: number, y2: number): Set<string> {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2);
+    const maxY = Math.max(y1, y2);
+    const ids = new Set<string>();
+    for (const t of tables) {
+      if (t.pos_x < maxX && t.pos_x + t.width > minX && t.pos_y < maxY && t.pos_y + t.height > minY) {
+        ids.add(t.id);
+      }
+    }
+    return ids;
+  }
+
+  function handleCanvasPointerDown(event: React.PointerEvent) {
+    if (event.button !== 0) return;
+    if (!editMode) return;
+    if ((event.target as HTMLElement) !== canvasRef.current) return;
+    event.preventDefault();
+    const { cx, cy } = getCanvasCoords(event.clientX, event.clientY);
+    const wrapper = canvasRef.current?.parentElement;
+    marqueeRef.current = { startCanvasX: cx, startCanvasY: cy, scrollLeft: wrapper?.scrollLeft ?? 0, scrollTop: wrapper?.scrollTop ?? 0 };
+    setMarquee({ x1: cx, y1: cy, x2: cx, y2: cy });
+    setSelectedIds(new Set());
+    setSelected(null);
+    setContextMenu(null);
+  }
+
   function handleCanvasClick(event: React.MouseEvent) {
     if ((event.target as HTMLElement) === canvasRef.current) {
-      setSelected(null);
-      setContextMenu(null);
-      setPanelTable(null);
+      if (!editMode) {
+        setSelected(null);
+        setContextMenu(null);
+        setPanelTable(null);
+      }
     }
   }
 
   function handleTablePointerDown(event: React.PointerEvent, table: RestaurantTable) {
     if (event.button !== 0) return;
     event.stopPropagation();
-    setSelected(table.id);
     if (editMode) {
       event.preventDefault();
-      dragRef.current = { id: table.id, startMouseX: event.clientX, startMouseY: event.clientY, startPosX: table.pos_x, startPosY: table.pos_y };
+      if (selectedIds.size > 1 && selectedIds.has(table.id)) {
+        const startPositions: Record<string, { x: number; y: number }> = {};
+        for (const id of selectedIds) {
+          const t = tables.find((t) => t.id === id);
+          if (t) startPositions[id] = { x: t.pos_x, y: t.pos_y };
+        }
+        groupDragRef.current = { ids: Array.from(selectedIds), startMouseX: event.clientX, startMouseY: event.clientY, startPositions };
+      } else {
+        setSelectedIds(new Set([table.id]));
+        setSelected(table.id);
+        dragRef.current = { id: table.id, startMouseX: event.clientX, startMouseY: event.clientY, startPosX: table.pos_x, startPosY: table.pos_y };
+      }
+    } else {
+      setSelected(table.id);
     }
   }
 
@@ -461,6 +518,24 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
 
   function handleTablePointerMove(event: React.PointerEvent) {
     if (!editMode) return;
+    if (marqueeRef.current) {
+      const { cx, cy } = getCanvasCoords(event.clientX, event.clientY);
+      const { startCanvasX, startCanvasY } = marqueeRef.current;
+      setMarquee({ x1: startCanvasX, y1: startCanvasY, x2: cx, y2: cy });
+      setSelectedIds(computeMarqueeSelectedIds(startCanvasX, startCanvasY, cx, cy));
+      return;
+    }
+    if (groupDragRef.current) {
+      const { ids, startMouseX, startMouseY, startPositions } = groupDragRef.current;
+      const dx = event.clientX - startMouseX;
+      const dy = event.clientY - startMouseY;
+      setTables((prev) => prev.map((t) => {
+        if (!ids.includes(t.id)) return t;
+        const start = startPositions[t.id];
+        return start ? { ...t, pos_x: Math.max(0, start.x + dx), pos_y: Math.max(0, start.y + dy) } : t;
+      }));
+      return;
+    }
     if (dragRef.current) {
       const { id, startMouseX, startMouseY, startPosX, startPosY } = dragRef.current;
       const dx = event.clientX - startMouseX;
@@ -488,19 +563,36 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
     event.preventDefault();
     event.stopPropagation();
     setSelected(table.id);
+    setSelectedIds(new Set([table.id]));
     resizeRef.current = { id: table.id, edge, startMouseX: event.clientX, startMouseY: event.clientY, startW: table.width, startH: table.height, startPosX: table.pos_x, startPosY: table.pos_y };
   }
 
+  const tablesRef = useRef(tables);
+  useEffect(() => { tablesRef.current = tables; }, [tables]);
+
   async function handleDragResizeEnd() {
+    if (marqueeRef.current) {
+      marqueeRef.current = null;
+      setMarquee(null);
+    }
+    if (groupDragRef.current) {
+      const { ids } = groupDragRef.current;
+      const snap = tablesRef.current;
+      await Promise.all(ids.map(async (id) => {
+        const t = snap.find((t) => t.id === id);
+        if (t) await tablesService.updatePosition(id, t.pos_x, t.pos_y).catch(() => {});
+      }));
+      groupDragRef.current = null;
+    }
     if (dragRef.current) {
       const { id } = dragRef.current;
-      const table = tables.find((t) => t.id === id);
+      const table = tablesRef.current.find((t) => t.id === id);
       if (table) await tablesService.updatePosition(id, table.pos_x, table.pos_y).catch(() => notify.error("No fue posible guardar la posicion."));
       dragRef.current = null;
     }
     if (resizeRef.current) {
       const { id, edge } = resizeRef.current;
-      const table = tables.find((t) => t.id === id);
+      const table = tablesRef.current.find((t) => t.id === id);
       if (table) {
         await tablesService.updateSize(id, table.width, table.height).catch(() => notify.error("No fue posible guardar el tamaño."));
         if (edge !== "se") await tablesService.updatePosition(id, table.pos_x, table.pos_y).catch(() => {});
@@ -511,7 +603,8 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
 
   function handleTableClick(event: React.MouseEvent, table: RestaurantTable) {
     event.stopPropagation();
-    if (editMode) { setSelected(table.id); return; }
+    if (table.type === "WALL" && !editMode) return;
+    if (editMode) return;
     setSelected(table.id);
     setPanelTable(table);
   }
@@ -519,10 +612,49 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   function handleTableContextMenu(event: React.MouseEvent, table: RestaurantTable) {
     event.preventDefault();
     event.stopPropagation();
+    if (table.type === "WALL" && !editMode) return;
+    if (editMode && selectedIds.size > 1 && selectedIds.has(table.id)) {
+      const menuHeight = 50;
+      const openUp = event.clientY + menuHeight > window.innerHeight;
+      setContextMenu({ x: event.clientX, y: event.clientY, openUp, table });
+      return;
+    }
     setSelected(table.id);
+    setSelectedIds(new Set([table.id]));
     const menuHeight = editMode ? 130 : 90;
     const openUp = event.clientY + menuHeight > window.innerHeight;
     setContextMenu({ x: event.clientX, y: event.clientY, openUp, table });
+  }
+
+  async function handleDeleteSelected() {
+    setContextMenu(null);
+    const ids = Array.from(selectedIds);
+    for (const id of ids) {
+      const t = tables.find((t) => t.id === id);
+      if (t?.type === "TABLE") {
+        const openOrder = await tableOrderService.getOpenOrderByTable(id).catch(() => null);
+        if (openOrder) {
+          notify.error(`No se puede eliminar "${t.name}" porque tiene una orden abierta.`);
+          return;
+        }
+      }
+    }
+    setConfirmModal({
+      title: `Eliminar ${ids.length} elemento${ids.length > 1 ? "s" : ""}`,
+      message: "Esta accion no se puede deshacer.",
+      onConfirm: async () => {
+        try {
+          await Promise.all(ids.map((id) => tablesService.delete(id)));
+          setTables((prev) => prev.filter((t) => !ids.includes(t.id)));
+          setSelectedIds(new Set());
+          setSelected(null);
+          notify.success(`${ids.length} elemento${ids.length > 1 ? "s" : ""} eliminado${ids.length > 1 ? "s" : ""}.`);
+        } catch {
+          notify.error("No fue posible eliminar los elementos.");
+        }
+        setConfirmModal(null);
+      },
+    });
   }
 
   function suggestCloneName(original: string): string {
@@ -550,6 +682,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
         pos_y: 50,
         type: "WALL",
         floor: currentFloor,
+        color: null,
       });
       setTables((prev) => [...prev, created]);
     } catch {
@@ -558,8 +691,20 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   }
 
   function openEditModal(table: RestaurantTable) {
-    setNameModal({ mode: "edit", table, name: table.name });
     setContextMenu(null);
+    if (table.type === "WALL") {
+      setWallColorModal({ table, color: table.color ?? "#d1d5db" });
+    } else {
+      setNameModal({ mode: "edit", table, name: table.name });
+    }
+  }
+
+  async function saveWallColor() {
+    if (!wallColorModal) return;
+    const updated = { ...wallColorModal.table, color: wallColorModal.color };
+    await tablesService.update(updated);
+    setTables((prev) => prev.map((t) => t.id === updated.id ? updated : t));
+    setWallColorModal(null);
   }
 
   function openCloneModal(table: RestaurantTable) {
@@ -582,6 +727,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           pos_y: 50,
           type: isWall ? "WALL" : "TABLE",
           floor: currentFloor,
+          color: null,
         });
         setTables((prev) => [...prev, created]);
       } else if (nameModal.mode === "edit" && nameModal.table) {
@@ -670,7 +816,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   function changeViewMode(mode: "free" | "grid") {
     setViewMode(mode);
     localStorage.setItem("tables-view-mode", mode);
-    if (mode === "grid") { setEditMode(false); setSelected(null); setContextMenu(null); }
+    if (mode === "grid") { setEditMode(false); setSelected(null); setSelectedIds(new Set()); setMarquee(null); setContextMenu(null); }
   }
 
   function changeGridSize(delta: number) {
@@ -682,6 +828,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
   }
 
   const selectedTable = selected ? tables.find((t) => t.id === selected) : null;
+  const isMultiSelect = selectedIds.size > 1;
 
   return (
     <Box h="full" display="flex" flexDirection="column" overflow="hidden">
@@ -695,6 +842,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
             <Button size="sm" variant="outline" onClick={addFloor}><Plus size={14} />Piso</Button>
             <Button size="sm" variant="outline" onClick={() => setCloneFloorConfirm(true)}>Clonar Piso</Button>
             <Button size="sm" variant="outline" onClick={openAddTable}><Plus size={14} />Mesa</Button>
+            <Button size="sm" variant="outline" onClick={() => void addWall()}><Plus size={14} />Pared</Button>
             <Button size="sm" variant="outline" colorPalette="red" onClick={requestDeleteFloor}><Trash2 size={14} />Eliminar Piso</Button>
           </Flex>
         ) : (
@@ -737,9 +885,9 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           </Tip>
         </Flex>
 
-        {isAdmin && viewMode === "free" && (
+        {viewMode === "free" && (
           <Button size="sm" variant={editMode ? "solid" : "outline"} colorPalette={editMode ? "purple" : "gray"}
-            onClick={() => { setEditMode((v) => !v); setSelected(null); setContextMenu(null); setPanelTable(null); }}>
+            onClick={() => { setEditMode((v) => !v); setSelected(null); setSelectedIds(new Set()); setMarquee(null); setContextMenu(null); setPanelTable(null); }}>
             <Pencil size={14} />{editMode ? "Salir de edicion" : "Editar Negocio"}
           </Button>
         )}
@@ -809,7 +957,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
         position="relative"
         onPointerMove={handleTablePointerMove}
         onPointerUp={(e) => handleTablePointerUp(e)}
-        onPointerLeave={() => { void handleDragResizeEnd(); }}
+        onPointerLeave={() => { void handleDragResizeEnd(); setMarquee(null); marqueeRef.current = null; }}
       >
         <Box
           ref={canvasRef}
@@ -817,9 +965,24 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           w="2000px"
           h="1400px"
           onClick={handleCanvasClick}
+          onPointerDown={handleCanvasPointerDown}
+          cursor={marquee ? "crosshair" : undefined}
         >
+          {marquee && editMode && (
+            <Box
+              position="absolute"
+              left={`${Math.min(marquee.x1, marquee.x2)}px`}
+              top={`${Math.min(marquee.y1, marquee.y2)}px`}
+              w={`${Math.abs(marquee.x2 - marquee.x1)}px`}
+              h={`${Math.abs(marquee.y2 - marquee.y1)}px`}
+              border="1.5px dashed #7c3aed"
+              bg="rgba(124,58,237,0.08)"
+              pointerEvents="none"
+              zIndex="10"
+            />
+          )}
           {tables.map((table) => {
-            const isSelected = selected === table.id;
+            const isSelected = editMode ? selectedIds.has(table.id) : selected === table.id;
             const tableStatus = getTableStatus(openOrders.get(table.id));
             // In edit mode the wrapper always has 6px padding so handles sit exactly
             // on the corners: nw=(pos_x, pos_y), ne=(pos_x+w, pos_y), etc.
@@ -949,11 +1112,15 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
           onClick={(e) => e.stopPropagation()}
         >
           {editMode ? (
-            <>
-              <ContextMenuItem label="Editar" onClick={() => openEditModal(contextMenu.table)} />
-              <ContextMenuItem label="Clonar" onClick={() => openCloneModal(contextMenu.table)} />
-              <ContextMenuItem label="Eliminar" danger onClick={() => void handleDeleteTable(contextMenu.table)} />
-            </>
+            isMultiSelect && selectedIds.has(contextMenu.table.id) ? (
+              <ContextMenuItem label={`Eliminar ${selectedIds.size} seleccionados`} danger onClick={() => void handleDeleteSelected()} />
+            ) : (
+              <>
+                <ContextMenuItem label="Editar" onClick={() => openEditModal(contextMenu.table)} />
+                <ContextMenuItem label="Clonar" onClick={() => openCloneModal(contextMenu.table)} />
+                <ContextMenuItem label="Eliminar" danger onClick={() => void handleDeleteTable(contextMenu.table)} />
+              </>
+            )
           ) : (
             <>
               <ContextMenuItem label="Transferir mesa" onClick={() => { setTransferSrcTable(contextMenu.table); setContextMenu(null); }} />
@@ -986,6 +1153,38 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
             <Flex justify="end" gap="3">
               <Button variant="outline" onClick={() => setNameModal(null)}>Cancelar</Button>
               <Button colorPalette="purple" disabled={!nameModal.name.trim()} onClick={() => void saveNameModal()}><Check size={17} />Guardar</Button>
+            </Flex>
+          </Stack>
+        </ModalOverlay>
+      )}
+
+      {/* Wall color modal */}
+      {wallColorModal && (
+        <ModalOverlay title="Color de pared" onClose={() => setWallColorModal(null)}>
+          <Stack gap="4">
+            <Flex gap="2" wrap="wrap">
+              {["#d1d5db","#1e293b","#854d0e","#166534","#1e3a5f","#7c3aed"].map((c) => (
+                <Box
+                  key={c}
+                  w="32px" h="32px" borderRadius="6px" bg={c} cursor="pointer" flexShrink="0"
+                  border={wallColorModal.color === c ? "3px solid #7c3aed" : "2px solid rgba(0,0,0,0.15)"}
+                  onClick={() => setWallColorModal((m) => m ? { ...m, color: c } : m)}
+                />
+              ))}
+            </Flex>
+            <Flex align="center" gap="3">
+              <Text fontSize="sm" color="gray.600" flexShrink="0">Personalizado</Text>
+              <input
+                type="color"
+                value={wallColorModal.color}
+                onChange={(e) => setWallColorModal((m) => m ? { ...m, color: e.target.value } : m)}
+                style={{ width: 40, height: 32, padding: 0, border: "none", cursor: "pointer", borderRadius: 4 }}
+              />
+              <Box w="32px" h="32px" borderRadius="6px" bg={wallColorModal.color} border="2px solid rgba(0,0,0,0.15)" flexShrink="0" />
+            </Flex>
+            <Flex justify="end" gap="3">
+              <Button variant="outline" onClick={() => setWallColorModal(null)}>Cancelar</Button>
+              <Button colorPalette="purple" onClick={() => void saveWallColor()}><Check size={17} />Guardar</Button>
             </Flex>
           </Stack>
         </ModalOverlay>
@@ -1342,11 +1541,13 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   const [comandaModal, setComandaModal] = useState<"client-select" | "reprint-client-select" | "reprint-options" | null>(null);
   const [reprintClientId, setReprintClientId] = useState<string | null>(null);
   const [devPreviewLines, setDevPreviewLines] = useState<string[] | null>(null);
+  const [devReceiptLines, setDevReceiptLines] = useState<string[] | null>(null);
 
-  // En dev, interceptar printComanda y mostrar preview
+  // En dev, interceptar printComanda y printReceipt y mostrar preview
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     setDevComandaPreviewCallback((lines) => setDevPreviewLines(lines));
+    setDevReceiptPreviewCallback((lines) => setDevReceiptLines(lines));
   }, []);
 
   const reload = async (): Promise<TableOrderClient[]> => {
@@ -1393,6 +1594,15 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
     });
   }, []);
 
+  function resolveNoteForClient(clientId: string | null): string | null {
+    if (clientId) {
+      const c = clients.find((c) => c.id === clientId);
+      return c?.notes?.trim() || null;
+    }
+    const notes = clients.map((c) => c.notes?.trim()).filter(Boolean) as string[];
+    return notes.length ? notes.join(" | ") : null;
+  }
+
   async function handleEnviarCocina(clientId: string | null) {
     setSendingComanda(true);
     try {
@@ -1404,7 +1614,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
         tableName: table.name,
         clientId: clientId,
         clientName: client?.client_name ?? null,
-        customerNotes: order.notes,
+        customerNotes: resolveNoteForClient(clientId),
         isDelivery: !!clientDelivery,
         deliveryPrice: clientDelivery?.price ?? null,
       });
@@ -1430,7 +1640,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
         tableName: table.name,
         clientId,
         clientName: client?.client_name ?? null,
-        customerNotes: order.notes,
+        customerNotes: resolveNoteForClient(clientId),
         isDelivery: false,
         deliveryPrice: null,
       });
@@ -1471,14 +1681,24 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
     try {
       const allItems = Array.from(itemsByClient.values()).flat();
       const rootI = allItems.filter((i) => !i.combo_table_order_item_id);
-      const domTotal = clients.reduce((s, c) => s + (deliveryTypes.find((d) => d.id === c.delivery_type_id)?.price ?? 0), 0);
+      const deliveryLines = clients
+        .map((c) => {
+          const dt = deliveryTypes.find((d) => d.id === c.delivery_type_id);
+          if (!dt) return null;
+          const clientLabel = clients.length > 1
+            ? `Domicilio (${c.client_name ?? `Cliente ${c.client_number}`})`
+            : "Domicilio";
+          return { label: clientLabel, price: dt.price };
+        })
+        .filter((x): x is { label: string; price: number } => x !== null);
+      const domTotal = deliveryLines.reduce((s, dl) => s + dl.price, 0);
       const preTotal = rootI.reduce((s, i) => s + i.subtotal, 0) + domTotal;
       const { saleService } = await import("../pos/SaleService");
       const [allAdditions, allSauces] = await Promise.all([
         import("../pos/PosService").then((m) => m.posService.additions()),
         import("../pos/PosService").then((m) => m.posService.sauces().then((r) => r.items)),
       ]);
-      await saleService.generatePreTicket(allItems, preTotal, table.name, bizSettings, allAdditions, allSauces);
+      await saleService.generatePreTicket(allItems, preTotal, table.name, bizSettings, allAdditions, allSauces, resolveNoteForClient(null), deliveryLines);
     } catch (err) {
       notify.error(`Error al generar pre-ticket: ${String(err)}`);
     } finally {
@@ -1707,8 +1927,6 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               </Tip>
             ) : (
               <Button size="sm" colorPalette="green" flex="1" onClick={() => {
-                // Releer items frescos de SQLite antes de abrir checkout para capturar
-                // notas y cambios recientes que aún no se reflejaron en el estado en memoria.
                 void reload().then(() => {
                   if (rootItems.length === 1) { setCheckout("todo"); return; }
                   setCheckout("selector");
@@ -1811,21 +2029,29 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               <Flex align="center" gap="2"><Printer size={16} /><Text fontWeight="bold" fontSize="sm">Preview Comanda (DEV)</Text></Flex>
               <Button size="xs" variant="ghost" onClick={() => setDevPreviewLines(null)}><X size={14} /></Button>
             </Flex>
-            <Box
-              as="pre"
-              fontFamily="monospace"
-              fontSize="12px"
-              lineHeight="1.6"
-              p="4"
-              bg="gray.50"
-              overflowY="auto"
-              maxH="60vh"
-              whiteSpace="pre-wrap"
-            >
+            <Box as="pre" fontFamily="monospace" fontSize="12px" lineHeight="1.6" p="4" bg="gray.50" overflowY="auto" maxH="60vh" whiteSpace="pre-wrap">
               {devPreviewLines.join("\n")}
             </Box>
             <Flex px="4" py="3" justify="end" borderTopWidth="1px" borderColor="gray.200">
               <Button size="sm" onClick={() => setDevPreviewLines(null)}>Cerrar</Button>
+            </Flex>
+          </Box>
+        </Flex>
+      )}
+
+      {/* Dev: preview de recibo / pre-ticket */}
+      {import.meta.env.DEV && devReceiptLines && (
+        <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+          <Box w="full" maxW="420px" bg="white" borderRadius="md" boxShadow="2xl" overflow="hidden">
+            <Flex px="4" py="3" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between">
+              <Flex align="center" gap="2"><Printer size={16} /><Text fontWeight="bold" fontSize="sm">Preview Recibo (DEV)</Text></Flex>
+              <Button size="xs" variant="ghost" onClick={() => setDevReceiptLines(null)}><X size={14} /></Button>
+            </Flex>
+            <Box as="pre" fontFamily="monospace" fontSize="12px" lineHeight="1.6" p="4" bg="gray.50" overflowY="auto" maxH="60vh" whiteSpace="pre-wrap">
+              {devReceiptLines.join("\n")}
+            </Box>
+            <Flex px="4" py="3" justify="end" borderTopWidth="1px" borderColor="gray.200">
+              <Button size="sm" onClick={() => setDevReceiptLines(null)}>Cerrar</Button>
             </Flex>
           </Box>
         </Flex>
@@ -1856,6 +2082,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
           allItems={allItems}
           deliveryTypes={deliveryTypes}
           orderTotal={orderTotal}
+          initialNote={resolveNoteForClient(checkout === "todo" ? null : checkout) ?? undefined}
           onClose={() => setCheckout(null)}
           onConfirmed={(orderClosed) => {
             setCheckout(null);
@@ -1889,6 +2116,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             deliveryTypes={deliveryTypes}
             orderTotal={slotTotal}
             initialDeliveryOverride={slot.deliveryType}
+            initialNote={resolveNoteForClient(null) ?? undefined}
             slotLabel={`Persona ${splitState.slotIndex + 1} de ${splitState.slots.length}`}
             hideCancelButton
             skipAutoClose
@@ -2005,8 +2233,7 @@ function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientCh
             }}
             mb="2"
           />
-
-          {/* Notas del cliente */}
+          {/* Notas del pedido (van a comanda y venta) */}
           <Input
             size="sm"
             placeholder="Notas del pedido"
@@ -2492,7 +2719,7 @@ function groupAuditItems(items: TableOrderItem[]) {
 
 type TablePayMethod = "cash" | "card" | "split";
 
-function TableCheckoutModal({ table, order, cash, clients, targetClientId, allItems, deliveryTypes, orderTotal, slotLabel, hideCancelButton, skipAutoClose, initialDeliveryOverride, onClose, onConfirmed }: {
+function TableCheckoutModal({ table, order, cash, clients, targetClientId, allItems, deliveryTypes, orderTotal, slotLabel, hideCancelButton, skipAutoClose, initialDeliveryOverride, initialNote, onClose, onConfirmed }: {
   table: RestaurantTable;
   order: TableOrder;
   cash: CashSession;
@@ -2505,6 +2732,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
   hideCancelButton?: boolean;
   skipAutoClose?: boolean;
   initialDeliveryOverride?: DeliveryType | null;
+  initialNote?: string;
   onClose: () => void;
   onConfirmed: (orderClosed: boolean) => void;
 }) {
@@ -2538,7 +2766,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
   const [splitMode, setSplitMode] = useState<"cash" | "card">("cash");
   const [splitCashGiven, setSplitCashGiven] = useState("");
   const [splitCashGivenTouched, setSplitCashGivenTouched] = useState(false);
-  const [orderNote, setOrderNote] = useState(client?.notes ?? order.notes ?? "");
+  const [orderNote, setOrderNote] = useState(initialNote ?? client?.notes ?? order.notes ?? "");
   const [printInvoice, setPrintInvoice] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -2688,7 +2916,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
       if (bizSettings?.phone && saleService.normalizeWhatsAppPhone(bizSettings.phone)) {
         const shouldSend = bizSettings.deliveryWhatsapp === "TODAS" || (bizSettings.deliveryWhatsapp === "SOLO_DOMICILIOS" && !!selectedDelivery);
         if (shouldSend) {
-          try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.phone, bizSettings.name, result.invoiceNumber, req, allAdditions, allSauces) }); } catch { /* non-fatal */ }
+          try { void invoke("open_help_url", { url: saleService.buildWhatsAppUrl(bizSettings.name, result.invoiceNumber, req, allAdditions, allSauces) }); } catch { /* non-fatal */ }
         }
       }
       if (method !== "card" && bizSettings?.printerReceipt) {
@@ -3228,6 +3456,11 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
     onItemsChange?.();
   }
 
+  async function increment() {
+    await tableOrderService.incrementItem(item.id);
+    onItemsChange?.();
+  }
+
   async function decrement() {
     const result = await tableOrderService.decrementItem(item.id);
     if (result === "removed") {
@@ -3274,6 +3507,12 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
             </Button>
           </Tip>
         )}
+        <Box w="1px" h="14px" bg="gray.200" mx="0.5" flexShrink="0" />
+        <Tip text="Agregar 1 unidad">
+          <Button size="xs" variant="ghost" colorPalette="green" onClick={() => void increment()} px="1">
+            <Plus size={13} />
+          </Button>
+        </Tip>
         <Tip text="Quitar 1 unidad">
           <Button size="xs" variant="ghost" colorPalette="red" onClick={() => void decrement()} px="1">
             <Minus size={13} />

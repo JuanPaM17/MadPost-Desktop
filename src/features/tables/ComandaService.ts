@@ -148,9 +148,25 @@ export const comandaService = {
     const tenantId = sessionContext.current()?.tenantId ?? "";
 
     const lastTime = await this.getLastComandaTime(params.tableOrderId);
-    const allItems = await this.getItemsForComanda(params.tableOrderId, lastTime, params.clientId);
+    let allItems = await this.getItemsForComanda(params.tableOrderId, lastTime, params.clientId);
 
-    // Solo items raiz para determinar si hay algo nuevo
+    // Si no hay items nuevos, verificar si la nota o el domicilio cambió respecto a la última comanda
+    if (!allItems.filter((i) => !i.combo_table_order_item_id).length && lastTime) {
+      const lastRows = await db.select<{ customer_notes: string | null; is_delivery: number; delivery_price: number | null }[]>(
+        "SELECT customer_notes, is_delivery, delivery_price FROM comandas WHERE table_order_id = $1 ORDER BY comanda_number DESC LIMIT 1",
+        [params.tableOrderId],
+      );
+      const last = lastRows[0];
+      const noteChanged = (last?.customer_notes ?? null) !== (params.customerNotes?.trim() || null);
+      const deliveryChanged = last
+        ? (last.is_delivery !== (params.isDelivery ? 1 : 0)) || ((last.delivery_price ?? null) !== (params.deliveryPrice ?? null))
+        : false;
+      if (noteChanged || deliveryChanged) {
+        allItems = await this.getItemsForComanda(params.tableOrderId, null, params.clientId);
+      }
+    }
+
+    // Solo items raiz para determinar si hay algo que enviar
     const rootItems = allItems.filter((i) => !i.combo_table_order_item_id);
     if (!rootItems.length) return null;
 

@@ -185,6 +185,22 @@ export const tableOrderService = {
     await db.execute("UPDATE table_order_clients SET status='CANCELLED' WHERE id=$1", [clientId]);
   },
 
+  async incrementItem(itemId: string): Promise<void> {
+    const db = await databaseManager.database();
+    const rows = await db.select<{ quantity: number; unit_price: number }[]>(
+      "SELECT quantity, unit_price FROM table_order_items WHERE id=$1", [itemId],
+    );
+    if (!rows.length) return;
+    const { quantity, unit_price } = rows[0];
+    const addRows = await db.select<{ price: number; quantity: number }[]>(
+      "SELECT price, quantity FROM table_order_item_additions WHERE table_order_item_id=$1", [itemId],
+    );
+    const additionsTotal = addRows.reduce((s, a) => s + a.price * a.quantity, 0);
+    const newQty = quantity + 1;
+    const newSubtotal = (unit_price + additionsTotal) * newQty;
+    await db.execute("UPDATE table_order_items SET quantity=$1, subtotal=$2, updated_at=$3 WHERE id=$4", [newQty, newSubtotal, instantNow(), itemId]);
+  },
+
   async decrementItem(itemId: string): Promise<"removed" | "decremented"> {
     const db = await databaseManager.database();
     const rows = await db.select<{ quantity: number; subtotal: number; unit_price: number }[]>(
@@ -211,7 +227,7 @@ export const tableOrderService = {
     const additionsTotal = addRows.reduce((s, a) => s + a.price * a.quantity, 0);
     const newQty = quantity - 1;
     const newSubtotal = (unit_price + additionsTotal) * newQty;
-    await db.execute("UPDATE table_order_items SET quantity=$1, subtotal=$2 WHERE id=$3", [newQty, newSubtotal, itemId]);
+    await db.execute("UPDATE table_order_items SET quantity=$1, subtotal=$2, updated_at=$3 WHERE id=$4", [newQty, newSubtotal, instantNow(), itemId]);
     return "decremented";
   },
 

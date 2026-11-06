@@ -348,6 +348,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "table_order_items", "updated_at", "TEXT");
     await this.ensureColumn(database, "tenants", "react_migrated", "INTEGER NOT NULL DEFAULT 0");
     await this.ensureColumn(database, "licenses_cache", "device_blocked", "INTEGER NOT NULL DEFAULT 0");
+    await this.ensureColumn(database, "restaurant_tables", "color", "TEXT");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     await this.dropRoleCheckConstraint(database);
     return database;

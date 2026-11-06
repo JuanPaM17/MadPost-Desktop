@@ -56,9 +56,13 @@ export function itemExtras(item: CartItem, additions: PosAddition[]) {
   return amount(item.additions) + item.children.reduce((total, child) => total + amount(child.additions, child.quantity), 0);
 }
 
+function normalize(str: string) {
+  return str.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase();
+}
+
 export function filterItems<T extends { name: string; description?: string | null }>(items: T[], search: string) {
-  const query = search.trim().toLocaleLowerCase();
-  return items.filter((item) => !query || item.name.toLocaleLowerCase().includes(query) || (item.description ?? "").toLocaleLowerCase().includes(query));
+  const query = normalize(search.trim());
+  return items.filter((item) => !query || normalize(item.name).includes(query) || normalize(item.description ?? "").includes(query));
 }
 
 export function money(value: number) {
@@ -73,10 +77,10 @@ export function CategoryBar({ categories, selected, hasCombos, onSelect }: { cat
     <Box overflowX="auto" className="pos-category-scroll">
       <Flex w="max-content" gap="2" pb="2">
         <CategoryButton active={selected === "all"} onClick={() => onSelect("all")}>Todos</CategoryButton>
+        {hasCombos ? <CategoryButton active={selected === "combos"} onClick={() => onSelect("combos")}>Combos</CategoryButton> : null}
         {categories.map((c) => (
           <CategoryButton key={c.id} active={selected === c.id} onClick={() => onSelect(c.id)}>{c.name}</CategoryButton>
         ))}
-        {hasCombos ? <CategoryButton active={selected === "combos"} onClick={() => onSelect("combos")}>Combos</CategoryButton> : null}
       </Flex>
     </Box>
   );
@@ -222,7 +226,7 @@ export function AdditionsModal({ name, additions, quantities, onClose, onChange,
 }) {
   const [search, setSearch] = useState("");
   const filtered = search.trim()
-    ? additions.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()))
+    ? additions.filter((a) => normalize(a.name).includes(normalize(search)))
     : additions;
   return (
     <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
@@ -532,8 +536,9 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   }, []);
 
   const [hasCombos, setHasCombos] = useState(false);
+  const [allCombos, setAllCombos] = useState<PosCombo[]>([]);
   useEffect(() => {
-    void Promise.all([posService.categories(), posService.combos()]).then(([cats, cms]) => { setCategories(cats); setHasCombos(cms.length > 0); }).catch(() => setCategories([]));
+    void Promise.all([posService.categories(), posService.combos()]).then(([cats, cms]) => { setCategories(cats); setHasCombos(cms.length > 0); setAllCombos(cms); }).catch(() => setCategories([]));
   }, []);
   useEffect(() => { void posService.additions().then(setAdditions).catch(() => setAdditions([])); }, []);
   useEffect(() => { void posService.sauces().then(({ items, max }) => { setSauces(items); setMaxSauces(max); }).catch(() => {}); }, []);
@@ -555,7 +560,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   }, [products, combos]);
 
   const productItems = useMemo(() => filterItems(products, search), [products, search]);
-  const comboItems = useMemo(() => filterItems(combos, search), [combos, search]);
+  const comboItems = useMemo(() => filterItems(search.trim() ? allCombos : combos, search), [allCombos, combos, search]);
 
   // ---------- helpers de flujo ----------
 
