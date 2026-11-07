@@ -48,7 +48,58 @@ function ProductDialog({ product, onClose, onSaved }: { product: Product | null;
   return <Modal maxW="780px"><Heading size="md">{product ? "Editar producto" : "Nuevo producto"}</Heading><Box maxH="calc(100vh - 170px)" overflowY="auto" pr="2"><Flex mt="5" gap="4" direction={{ base: "column", md: "row" }}><Field label="Nombre *"><Input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label="Precio *"><Input inputMode="decimal" placeholder="0" value={price} onChange={(event) => setPrice(event.target.value)} /></Field></Flex><Flex gap="4" direction={{ base: "column", md: "row" }}><Field label="Categoria *"><ScrollableSelect placement="bottom" value={categoryId} placeholder="Selecciona una categoria" options={categories.map((category) => ({ value: category.id, label: category.name }))} onValueChange={setCategoryId} /></Field><Field label="Descripcion"><Textarea resize="vertical" minH="40px" value={description} onChange={(event) => setDescription(event.target.value)} /></Field></Flex><Box mt="6" pt="5" borderTopWidth="1px" borderColor="gray.200"><Heading size="sm">Control de stock</Heading><Flex mt="3" gap="2" wrap="wrap"><ModeButton active={stockMode === "infinite"} onClick={() => setStockMode("infinite")}>Inventario infinito</ModeButton><ModeButton active={stockMode === "direct"} onClick={() => setStockMode("direct")}>Stock directo</ModeButton><ModeButton active={stockMode === "supplies"} onClick={() => setStockMode("supplies")}>Insumos compartidos</ModeButton></Flex>{stockMode === "infinite" ? <Text mt="3" color="gray.500" fontSize="sm">El producto no tendra limite de inventario.</Text> : null}{stockMode === "direct" ? <Field label="Unidades disponibles"><Input w={{ base: "full", md: "220px" }} inputMode="decimal" value={stock} onChange={(event) => setStock(event.target.value)} /></Field> : null}{stockMode === "supplies" ? <SupplyLinks supplies={supplies} links={links} onLinksChange={setLinks} /> : null}</Box><Box mt="6" pt="5" borderTopWidth="1px" borderColor="gray.200"><Heading size="sm">Opciones del producto</Heading><Text mt="1" color="gray.500" fontSize="sm">Sabores, tamanos u otras opciones que el cliente podra elegir.</Text><Flex mt="3" gap="2"><Input placeholder="Ej: Grande, Lychee" value={optionName} onChange={(event) => setOptionName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addOption(); } }} /><Button variant="outline" onClick={addOption}><Plus size={16} />Agregar</Button></Flex><Stack mt="3" gap="2">{options.map((option) => <Flex key={option.id} align="center" gap="2" justify="space-between" bg="gray.50" p="2" borderRadius="sm">{editingOption === option.id ? <Input size="sm" autoFocus value={optionDraft} onChange={(event) => setOptionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveOptionName(option); if (event.key === "Escape") setEditingOption(null); }} /> : <Text fontSize="sm" flex="1">{option.name}</Text>}<Flex gap="1"><Button size="xs" variant="ghost" onClick={() => editingOption === option.id ? saveOptionName(option) : (setEditingOption(option.id), setOptionDraft(option.name))}>{editingOption === option.id ? <Check size={14} /> : <Pencil size={14} />}</Button><Button size="xs" variant="ghost" colorPalette="red" onClick={() => setOptions((current) => current.filter((item) => item.id !== option.id))}><X size={14} /></Button></Flex></Flex>)}{!options.length ? <Text mt="3" fontSize="sm" color="gray.500">Sin opciones configuradas.</Text> : null}</Stack></Box></Box>{error ? <Text mt="3" color="red.600" fontSize="sm">{error}</Text> : null}<Flex justify="end" gap="3" mt="6"><Button variant="outline" onClick={onClose} disabled={saving}><X size={17} />Cancelar</Button><Button colorPalette="purple" disabled={saving} onClick={() => void save()}><Check size={17} />{saving ? "Guardando..." : "Guardar"}</Button></Flex></Modal>;
 }
 
-function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupplyOption[]; links: ProductSupply[]; onLinksChange: (links: ProductSupply[]) => void }) { const [search, setSearch] = useState(""); const query = search.trim().toLowerCase(); const visibleSupplies = supplies.filter((supply) => !query || supply.name.toLowerCase().includes(query)); function toggle(supply: ProductSupplyOption, checked: boolean) { if (checked) onLinksChange([...links.filter((link) => link.supplyId !== supply.id), { supplyId: supply.id, quantityPerSale: 1 }]); else onLinksChange(links.filter((link) => link.supplyId !== supply.id)); } function updateQuantity(supplyId: string, value: string) { const quantity = Number(value); onLinksChange(links.map((link) => link.supplyId === supplyId ? { ...link, quantityPerSale: Number.isFinite(quantity) && quantity > 0 ? quantity : -1 } : link)); } return <Box mt="4"><Text fontSize="sm" color="gray.600">Marca los insumos que consume este producto y ajusta la cantidad por venta.</Text><Box mt="3" position="relative" maxW="380px"><Search size={16} color="#6b7280" style={{ position: "absolute", left: 11, top: 10, zIndex: 1 }} /><Input pl="9" size="sm" placeholder="Buscar insumo..." value={search} onChange={(event) => setSearch(event.target.value)} /></Box><Stack mt="3" maxH="180px" overflowY="auto" borderWidth="1px" borderColor="gray.200" borderRadius="md" p="2" gap="1">{visibleSupplies.map((supply) => { const link = links.find((entry) => entry.supplyId === supply.id); const checked = Boolean(link); const valid = !link || link.quantityPerSale > 0; return <Flex key={supply.id} align="center" gap="3" p="2" borderRadius="sm" bg={checked ? "purple.50" : "transparent"}><Checkbox.Root checked={checked} onCheckedChange={(details) => toggle(supply, details.checked === true)} flex="1"><Checkbox.HiddenInput /><Checkbox.Control /><Checkbox.Label>{supply.name}</Checkbox.Label></Checkbox.Root><Text fontSize="xs" color="gray.500">Cant.</Text><Input w="76px" size="sm" inputMode="decimal" disabled={!checked} value={link ? String(link.quantityPerSale > 0 ? link.quantityPerSale : "") : "1"} borderColor={valid ? undefined : "red.500"} onChange={(event) => updateQuantity(supply.id, event.target.value)} /></Flex>; })}{!visibleSupplies.length ? <Text py="5" textAlign="center" color="gray.500" fontSize="sm">No hay insumos disponibles.</Text> : null}</Stack></Box>; }
+function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupplyOption[]; links: ProductSupply[]; onLinksChange: (links: ProductSupply[]) => void }) {
+  const [search, setSearch] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const linkedIds = useMemo(() => new Set(links.map((l) => l.supplyId)), []);
+  const [sortedSupplies] = useState(() => {
+    if (!linkedIds.size) return supplies;
+    return [...supplies.filter((s) => linkedIds.has(s.id)), ...supplies.filter((s) => !linkedIds.has(s.id))];
+  });
+  const query = search.trim().toLowerCase();
+  const visibleSupplies = sortedSupplies.filter((supply) => !query || supply.name.toLowerCase().includes(query));
+  function toggle(supply: ProductSupplyOption, checked: boolean) {
+    if (checked) {
+      onLinksChange([...links.filter((link) => link.supplyId !== supply.id), { supplyId: supply.id, quantityPerSale: 1 }]);
+      setDrafts((prev) => ({ ...prev, [supply.id]: "1" }));
+    } else {
+      onLinksChange(links.filter((link) => link.supplyId !== supply.id));
+      setDrafts((prev) => { const next = { ...prev }; delete next[supply.id]; return next; });
+    }
+  }
+  function handleQuantityChange(supplyId: string, value: string) {
+    setDrafts((prev) => ({ ...prev, [supplyId]: value }));
+    const quantity = Number(value);
+    if (Number.isFinite(quantity) && quantity > 0) {
+      onLinksChange(links.map((link) => link.supplyId === supplyId ? { ...link, quantityPerSale: quantity } : link));
+    }
+  }
+  function getInputValue(supplyId: string, link: ProductSupply | undefined): string {
+    if (supplyId in drafts) return drafts[supplyId];
+    if (!link) return "1";
+    return link.quantityPerSale > 0 ? String(link.quantityPerSale) : "";
+  }
+  return <Box mt="4">
+    <Text fontSize="sm" color="gray.600">Marca los insumos que consume este producto y ajusta la cantidad por venta.</Text>
+    <Box mt="3" position="relative" maxW="380px"><Search size={16} color="#6b7280" style={{ position: "absolute", left: 11, top: 10, zIndex: 1 }} /><Input pl="9" size="sm" placeholder="Buscar insumo..." value={search} onChange={(event) => setSearch(event.target.value)} /></Box>
+    <Stack mt="3" maxH="180px" overflowY="auto" borderWidth="1px" borderColor="gray.200" borderRadius="md" p="2" gap="1">
+      {visibleSupplies.map((supply) => {
+        const link = links.find((entry) => entry.supplyId === supply.id);
+        const checked = Boolean(link);
+        const inputVal = getInputValue(supply.id, link);
+        const valid = !checked || (Number(inputVal) > 0);
+        return <Flex key={supply.id} align="center" gap="3" p="2" borderRadius="sm" bg={checked ? "purple.50" : "transparent"}>
+          <Checkbox.Root checked={checked} onCheckedChange={(details) => toggle(supply, details.checked === true)} flex="1">
+            <Checkbox.HiddenInput /><Checkbox.Control /><Checkbox.Label>{supply.name}</Checkbox.Label>
+          </Checkbox.Root>
+          <Text fontSize="xs" color="gray.500">Cant.</Text>
+          <Input w="76px" size="sm" inputMode="decimal" disabled={!checked} value={checked ? inputVal : "1"} borderColor={valid ? undefined : "red.500"} onChange={(event) => handleQuantityChange(supply.id, event.target.value)} />
+        </Flex>;
+      })}
+      {!visibleSupplies.length ? <Text py="5" textAlign="center" color="gray.500" fontSize="sm">No hay insumos disponibles.</Text> : null}
+    </Stack>
+  </Box>;
+}
 function ModeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) { return <Button size="sm" variant={active ? "solid" : "outline"} colorPalette={active ? "purple" : "gray"} onClick={onClick}>{children}</Button>; }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <Box mt="4" flex="1"><Text mb="2" fontSize="sm" fontWeight="semibold">{label}</Text>{children}</Box>; }
 function ConfirmDialog({ title, message, confirmLabel, danger, onCancel, onConfirm }: { title: string; message: string; confirmLabel: string; danger?: boolean; onCancel: () => void; onConfirm: () => void }) { return <Modal maxW="460px"><Heading size="md">{title}</Heading><Text mt="3" color="gray.600">{message}</Text><Flex justify="end" gap="3" mt="6"><Button variant="outline" onClick={onCancel}>Cancelar</Button><Button colorPalette={danger ? "red" : "purple"} onClick={onConfirm}>{confirmLabel}</Button></Flex></Modal>; }

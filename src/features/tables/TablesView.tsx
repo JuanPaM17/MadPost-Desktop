@@ -707,9 +707,18 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
     setWallColorModal(null);
   }
 
-  function openCloneModal(table: RestaurantTable) {
-    setNameModal({ mode: "clone", table, name: suggestCloneName(table.name) });
+  async function openCloneModal(table: RestaurantTable) {
     setContextMenu(null);
+    if (table.type === "WALL") {
+      try {
+        const cloned = await tablesService.clone(table, { name: table.name, pos_x: table.pos_x, pos_y: table.pos_y });
+        setTables((prev) => [...prev, cloned]);
+      } catch {
+        notify.error("No fue posible clonar la pared.");
+      }
+      return;
+    }
+    setNameModal({ mode: "clone", table, name: suggestCloneName(table.name) });
   }
 
   async function saveNameModal() {
@@ -1006,6 +1015,7 @@ export function TablesView({ onNavigate }: { onNavigate: (view: string, param?: 
                   borderRadius={table.shape === "ROUND" ? "50%" : "8px"}
                   cursor={editMode ? "grab" : "pointer"}
                   onPointerDown={(e) => handleTablePointerDown(e, table)}
+                  onPointerUp={(e) => { if (e.button === 0) void handleDragResizeEnd(); }}
                   onClick={(e) => handleTableClick(e, table)}
                   onContextMenu={(e) => handleTableContextMenu(e, table)}
                 >
@@ -2836,7 +2846,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
         scs.flatMap((s) => { const found = allSauces.find((x) => x.name === s.name); return found ? [found.id] : []; });
 
       const saleItems: import("../pos/SaleService").SaleItemRequest[] = rootItems.map((item) => {
-        const isCombo = !!item.combo_id && !item.combo_table_order_item_id && item.product_id === null;
+        const isCombo = !!item.combo_id && !item.combo_table_order_item_id;
         const children = itemsToCobrar.filter((c) => c.combo_table_order_item_id === item.id);
         return {
           key: item.id,

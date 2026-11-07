@@ -66,7 +66,7 @@ async function loadHomeData(tenantId: string, cashSessionId: string | null, isAd
 // ---------------------------------------------------------------------------
 // HomeView
 // ---------------------------------------------------------------------------
-export function HomeView({ onNavigate }: { onNavigate: (view: string) => void }) {
+export function HomeView({ onNavigate }: { onNavigate: (view: string, param?: string) => void }) {
   const session = sessionContext.current();
   const isAdmin = session?.user.role === "ADMIN" || session?.user.role === "SUPERADMIN";
   const isSuperAdminOrDev = session?.user.role === "SUPERADMIN" || import.meta.env.DEV;
@@ -165,7 +165,7 @@ export function HomeView({ onNavigate }: { onNavigate: (view: string) => void })
               value={data?.lowStockCount ? `${data.lowStockCount} insumos` : "Todo en orden"}
               subtitle={data?.lowStockCount ? "Requieren reabastecimiento" : "Sin alertas de inventario"}
               action={sessionContext.hasPermission("inventory.view") ? "Ver Inventario" : undefined}
-              onAction={() => onNavigate("inventory")}
+              onAction={() => onNavigate("inventory", data?.lowStockCount ? "lowstock" : undefined)}
             />
           </Grid>
 

@@ -399,11 +399,12 @@ function ComboAdditionsModal({ comboChildren, additions, additionsByChild, onClo
 // ---------------------------------------------------------------------------
 // MiniCart — carrito temporal derecho
 // ---------------------------------------------------------------------------
-function MiniCart({ items, additions, sauces, onRemove, onEditAdditions, onEditSauces, onEditOption, onConfirm, onCancel }: {
+function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions, onEditSauces, onEditOption, onConfirm, onCancel }: {
   items: CartItem[];
   additions: PosAddition[];
   sauces: PosSauce[];
   onRemove: (key: string) => void;
+  onClone: (key: string) => void;
   onEditAdditions: (key: string, childId?: string) => void;
   onEditSauces: (key: string, childId?: string) => void;
   onEditOption: (key: string, childId?: string) => void;
@@ -429,7 +430,10 @@ function MiniCart({ items, additions, sauces, onRemove, onEditAdditions, onEditS
                     <Text fontSize="sm" fontWeight="semibold" truncate>{item.quantity > 1 ? `${item.quantity}x ` : ""}{item.name}</Text>
                     {item.kind === "combo" ? <Badge size="xs" colorPalette="blue" variant="subtle" mt="0.5">Combo</Badge> : null}
                   </Box>
-                  <Button size="xs" variant="ghost" colorPalette="red" flexShrink="0" onClick={() => onRemove(item.key)}><Trash2 size={13} /></Button>
+                  <Flex gap="1" flexShrink="0">
+                    <Button size="xs" variant="ghost" colorPalette="purple" onClick={() => onClone(item.key)}><Plus size={13} /></Button>
+                    <Button size="xs" variant="ghost" colorPalette="red" onClick={() => onRemove(item.key)}><Trash2 size={13} /></Button>
+                  </Flex>
                 </Flex>
                 {item.options.length > 0
                   ? <Button size="xs" variant="ghost" colorPalette="orange" mt="0.5" onClick={() => onEditOption(item.key)}>Opcion: {item.selectedOption ?? "—"}</Button>
@@ -860,6 +864,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         additions={additions}
         sauces={sauces}
         onRemove={(key) => setCart((prev) => prev.filter((i) => i.key !== key))}
+        onClone={(key) => setCart((prev) => { const src = prev.find((i) => i.key === key); if (!src) return prev; const originalId = src.key.split(":")[1] ?? ""; return [...prev, { ...src, key: `${src.kind}:${originalId}:${Date.now()}` }]; })}
         onEditAdditions={handleEditAdditions}
         onEditSauces={handleEditSauces}
         onEditOption={handleEditOption}

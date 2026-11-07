@@ -281,7 +281,13 @@ class SaleService {
             original_unit_price: null, category_name: null,
           });
           await this.insertAdditionsAndSauces(database, childId, child.additions, child.sauces, allAdditions, allSauces, item.quantity);
-          // Stock: hijos de combo no descuentan stock directo (igual que Java)
+          await deductProductStock(database, tenantId, userId, userName, child.productId, child.name, child.quantity * item.quantity, invoiceNumber);
+          for (const [additionId, qty] of Object.entries(child.additions)) {
+            if (qty <= 0) continue;
+            const addition = allAdditions.find((a) => a.id === additionId);
+            if (!addition) continue;
+            await deductAdditionStock(database, tenantId, userId, userName, additionId, addition.name, item.quantity * qty, invoiceNumber);
+          }
         }
       } else {
         // Producto normal
