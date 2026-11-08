@@ -2,6 +2,8 @@ import { Badge, Box, Button, Flex, Heading, Spinner, Stack, Text } from "@chakra
 import { ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Download, RefreshCw, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { APP_VERSION, type ReleaseEntry, updateService, type UpdateCheckResult } from "./UpdateService";
+import { backupService } from "../backup/BackupService";
+import { sessionContext } from "../../core/session/SessionContext";
 
 export function UpdateView() {
   const [checking, setChecking] = useState(true); const [result, setResult] = useState<UpdateCheckResult | null>(null);
@@ -10,7 +12,7 @@ export function UpdateView() {
   useEffect(() => { void refresh(); }, []);
 
   async function refresh() { setChecking(true); setResult(null); setInstallError(""); const [check, history] = await Promise.all([updateService.check(), updateService.listReleases()]); setResult(check); setReleases(history); setChecking(false); }
-  async function install() { if (!result?.update) return; setInstalling(true); setInstallError(""); try { await updateService.install(result.update); } catch (error) { setInstallError(error instanceof Error ? error.message : "No fue posible iniciar la actualizacion."); setInstalling(false); } }
+  async function install() { if (!result?.update) return; setInstalling(true); setInstallError(""); try { const tenantId = sessionContext.current()?.tenantId; if (tenantId) await backupService.createBackup(tenantId); await updateService.install(result.update); } catch (error) { setInstallError(error instanceof Error ? error.message : "No fue posible iniciar la actualizacion."); setInstalling(false); } }
 
   return <Flex w="full" maxW="1180px" mx="auto" gap="6" direction={{ base: "column", xl: "row" }}>
     <Stack w={{ base: "full", xl: "410px" }} flexShrink="0" gap="5"><Panel><Text color="gray.500" fontWeight="bold" fontSize="xs">VERSION INSTALADA</Text><Heading mt="2" size="2xl">v{APP_VERSION}</Heading></Panel>

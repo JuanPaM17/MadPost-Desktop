@@ -45,8 +45,8 @@ fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_
 fn unpublish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::NativeResult { mobile_api::unpublish_mdns(&state) }
 
 #[tauri::command]
-async fn check_for_update() -> update_installer::UpdateCheckResult {
-    tauri::async_runtime::spawn_blocking(update_installer::check_update).await
+async fn check_for_update(prerelease_access: bool) -> update_installer::UpdateCheckResult {
+    tauri::async_runtime::spawn_blocking(move || update_installer::check_update(prerelease_access)).await
         .unwrap_or_else(|_| update_installer::UpdateCheckResult {
             state: "unavailable".into(),
             message: "No pudimos conectarnos para buscar actualizaciones.".into(),
@@ -54,8 +54,8 @@ async fn check_for_update() -> update_installer::UpdateCheckResult {
         })
 }
 #[tauri::command]
-async fn list_releases() -> Vec<update_installer::ReleaseEntry> {
-    tauri::async_runtime::spawn_blocking(update_installer::list_releases).await.unwrap_or_default()
+async fn list_releases(prerelease_access: bool) -> Vec<update_installer::ReleaseEntry> {
+    tauri::async_runtime::spawn_blocking(move || update_installer::list_releases(prerelease_access)).await.unwrap_or_default()
 }
 
 #[tauri::command]
@@ -105,32 +105,27 @@ fn save_and_open_invoice_pdf(app: tauri::AppHandle, session_number: u32, file_na
     Ok(target.to_string_lossy().to_string())
 }
 
-/// Convierte un string UTF-8 a bytes CP850 para impresoras termicas.
-/// Los caracteres sin equivalente en CP850 se reemplazan por '?'.
+/// Convierte un string UTF-8 a bytes CP850 usando WideCharToMultiByte de Windows.
 fn to_cp850(s: &str) -> Vec<u8> {
-    s.chars().map(|c| match c {
-        // ASCII directo
-        '\x00'..='\x7F' => c as u8,
-        // Letras con acento y especiales latinos en CP850
-        'Ç' => 0x80, 'ü' => 0x81, 'é' => 0x82, 'â' => 0x83, 'ä' => 0x84,
-        'à' => 0x85, 'å' => 0x86, 'ç' => 0x87, 'ê' => 0x88, 'ë' => 0x89,
-        'è' => 0x8A, 'ï' => 0x8B, 'î' => 0x8C, 'ì' => 0x8D, 'Ä' => 0x8E,
-        'Å' => 0x8F, 'É' => 0x90, 'æ' => 0x91, 'Æ' => 0x92, 'ô' => 0x93,
-        'ö' => 0x94, 'ò' => 0x95, 'û' => 0x96, 'ù' => 0x97, 'ÿ' => 0x98,
-        'Ö' => 0x99, 'Ü' => 0x9A, 'ø' => 0x9B, '£' => 0x9C, 'Ø' => 0x9D,
-        '×' => 0x9E, 'ƒ' => 0x9F, 'á' => 0xA0, 'í' => 0xA1, 'ó' => 0xA2,
-        'ú' => 0xA3, 'ñ' => 0xA4, 'Ñ' => 0xA5, 'ª' => 0xA6, 'º' => 0xA7,
-        '¿' => 0xA8, '®' => 0xA9, '¬' => 0xAA, '½' => 0xAB, '¼' => 0xAC,
-        '¡' => 0xAD, '«' => 0xAE, '»' => 0xAF, 'À' => 0xB5, 'Á' => 0xB6,
-        'Â' => 0xB7, 'È' => 0xD4, 'Ê' => 0xD2, 'Ë' => 0xD3, 'Í' => 0xD6,
-        'Î' => 0xD7, 'Ï' => 0xD8, 'Ì' => 0xDE, 'Ó' => 0xE0, 'ß' => 0xE1,
-        'Ô' => 0xE2, 'Ò' => 0xE3, 'õ' => 0xE4, 'Õ' => 0xE5, 'µ' => 0xE6,
-        'Þ' => 0xE7, 'Ú' => 0xE9, 'Û' => 0xEA, 'Ù' => 0xEB, 'ý' => 0xEC,
-        'Ý' => 0xED, '¯' => 0xEE, '´' => 0xEF, '­' => 0xF0, '±' => 0xF1,
-        '‗' => 0xF2, '¾' => 0xF3, '¶' => 0xF4, '§' => 0xF5, '÷' => 0xF6,
-        '¸' => 0xF7, '°' => 0xF8, '¨' => 0xF9, '·' => 0xFA, '¹' => 0xFB,
-        '³' => 0xFC, '²' => 0xFD, _ => b'?',
-    }).collect()
+    use std::ffi::c_int;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn WideCharToMultiByte(
+            code_page: u32, flags: u32,
+            wide_str: *const u16, wide_len: c_int,
+            mb_str: *mut u8, mb_len: c_int,
+            default_char: *const u8, used_default: *mut i32,
+        ) -> c_int;
+    }
+    let wide: Vec<u16> = s.encode_utf16().collect();
+    if wide.is_empty() { return Vec::new(); }
+    unsafe {
+        let len = WideCharToMultiByte(850, 0, wide.as_ptr(), wide.len() as c_int, std::ptr::null_mut(), 0, b"?".as_ptr(), std::ptr::null_mut());
+        if len <= 0 { return s.as_bytes().to_vec(); }
+        let mut buf = vec![0u8; len as usize];
+        WideCharToMultiByte(850, 0, wide.as_ptr(), wide.len() as c_int, buf.as_mut_ptr(), len, b"?".as_ptr(), std::ptr::null_mut());
+        buf
+    }
 }
 
 #[tauri::command]

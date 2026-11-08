@@ -35,6 +35,7 @@ import {
   type CashTopProduct,
 } from "./CashRegisterService";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
+import { backupScheduler } from "../backup/BackupScheduler";
 
 export function CashRegisterView() {
   const current = sessionContext.current();
@@ -92,6 +93,7 @@ export function CashRegisterView() {
     setBusy(true);
     try {
       await cashRegisterService.openSession(amount);
+      void backupScheduler.onCashSessionOpened(sessionContext.current()?.tenantId ?? "");
       notify.success("Caja abierta correctamente.");
       setDialog(null);
       await refresh();
@@ -129,6 +131,7 @@ export function CashRegisterView() {
     setBusy(true);
     try {
       await cashRegisterService.closeSession(open, amount);
+      void backupScheduler.onCashSessionClosed(sessionContext.current()?.tenantId ?? "");
       notify.success("Caja cerrada correctamente.");
       setDialog(null);
       await refresh();
@@ -146,6 +149,7 @@ export function CashRegisterView() {
     setBusy(true);
     try {
       const closed = await cashRegisterService.closeSession(open, open.openingAmount);
+      void backupScheduler.onCashSessionClosed(sessionContext.current()?.tenantId ?? "");
       await cashRegisterService.deleteClosedSession(closed.cash, true);
       notify.success("Caja eliminada sin registrar.");
       setDialog(null);

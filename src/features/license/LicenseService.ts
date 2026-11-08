@@ -11,6 +11,7 @@ type RemoteLicense = {
   expires_at: string;
   sync_enabled: boolean | null;
   max_devices: number | null;
+  prerelease_access: boolean | null;
   tenants: RemoteTenant;
 };
 type RemoteDevice = { id: string; device_id: string; hostname: string; active: boolean };
@@ -98,7 +99,7 @@ class LicenseService {
     const { data, error } = await supabaseConnection
       .getClient()
       .from("licenses")
-      .select("key, tenant_id, expires_at, sync_enabled, max_devices, tenants(name, slug, address, phone, tax_id)")
+      .select("key, tenant_id, expires_at, sync_enabled, max_devices, prerelease_access, tenants(name, slug, address, phone, tax_id)")
       .eq("key", key)
       .eq("active", true)
       .maybeSingle<RemoteLicense>();
@@ -163,6 +164,22 @@ class LicenseService {
   private toTenant(license: RemoteLicense): Tenant {
     const remoteTenant = Array.isArray(license.tenants) ? license.tenants[0] : license.tenants;
     return { id: license.tenant_id, name: remoteTenant?.name ?? "Mi negocio", slug: remoteTenant?.slug ?? null, address: remoteTenant?.address ?? null, phone: remoteTenant?.phone ?? null, tax_id: remoteTenant?.tax_id ?? null };
+  }
+
+  async hasPrereleaseAccess(): Promise<boolean> {
+    try {
+      const cached = await licenseRepository.getValid();
+      if (!cached) return false;
+      const { data } = await supabaseConnection
+        .getClient()
+        .from("licenses")
+        .select("prerelease_access")
+        .eq("key", cached.key)
+        .maybeSingle<{ prerelease_access: boolean | null }>();
+      return data?.prerelease_access ?? false;
+    } catch {
+      return false;
+    }
   }
 
   private async cache(license: RemoteLicense, tenant: Tenant, deviceId: string) {

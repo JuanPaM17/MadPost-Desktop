@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { runtimeLogger } from "../runtime/RuntimeLogger";
+import { licenseService } from "../license/LicenseService";
 
 export const APP_VERSION = __MADPOST_VERSION__;
 export type UpdateInfo = { version: string; releaseUrl: string; downloadUrl: string | null; releaseNotes: string; forced: boolean };
@@ -11,7 +12,8 @@ class UpdateService {
 
   async check(): Promise<UpdateCheckResult> {
     try {
-      return await invoke<UpdateCheckResult>("check_for_update");
+      const prereleaseAccess = await licenseService.hasPrereleaseAccess();
+      return await invoke<UpdateCheckResult>("check_for_update", { prereleaseAccess });
     } catch (error) {
       runtimeLogger.info("UpdateService", "check_for_update invoke failed", { reason: error instanceof Error ? error.message : String(error) });
       return { state: "unavailable", message: "No pudimos conectarnos para buscar actualizaciones. Puedes intentarlo de nuevo mas tarde.", update: null };
@@ -20,7 +22,8 @@ class UpdateService {
 
   async listReleases(): Promise<ReleaseEntry[]> {
     try {
-      return await invoke<ReleaseEntry[]>("list_releases");
+      const prereleaseAccess = await licenseService.hasPrereleaseAccess();
+      return await invoke<ReleaseEntry[]>("list_releases", { prereleaseAccess });
     } catch { return []; }
   }
 

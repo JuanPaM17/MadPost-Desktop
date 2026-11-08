@@ -9,7 +9,7 @@ import { sessionContext } from "../../core/session/SessionContext";
 import { notify } from "../../components/ui/AppToaster";
 import { tablesService, type RestaurantTable } from "./TablesService";
 import { tableOrderService, type TableOrder, type TableOrderClient, type TableOrderItem } from "./TableOrderService";
-import { businessConfigService, printerService, type DeliveryType } from "../config/BusinessConfigService";
+import { businessConfigService, DEV_PRINTER_NAME, printerService, type DeliveryType } from "../config/BusinessConfigService";
 import { auditService } from "../audit/AuditService";
 import { Tip } from "../../components/ui/Tip";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
@@ -1544,6 +1544,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   const moreRef = useRef<HTMLDivElement>(null);
   // Comanda
   const [kitchenPrinter, setKitchenPrinter] = useState<string | null>(null);
+  const [hasPrinter, setHasPrinter] = useState(false);
   const [comandaCopies, setComandaCopies] = useState(1);
   const [sendingComanda, setSendingComanda] = useState(false);
   const [printingPreTicket, setPrintingPreTicket] = useState(false);
@@ -1597,8 +1598,9 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
 
   useEffect(() => {
     void Promise.all([businessConfigService.load(), printerService.list()]).then(([settings, printers]) => {
-      const kitchen = settings.printerKitchen && printers.includes(settings.printerKitchen) ? settings.printerKitchen : null;
+      const kitchen = settings.printerKitchen && (printers.includes(settings.printerKitchen) || (import.meta.env.DEV && settings.printerKitchen === DEV_PRINTER_NAME)) ? settings.printerKitchen : null;
       setKitchenPrinter(kitchen);
+      setHasPrinter(Boolean(settings.printerReceipt && (printers.includes(settings.printerReceipt) || (import.meta.env.DEV && settings.printerReceipt === DEV_PRINTER_NAME))));
       setComandaCopies(settings.comandaCopies > 0 ? settings.comandaCopies : 1);
       setBizSettings(settings);
     });
@@ -1641,7 +1643,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   }
 
   async function handleReprintAll(clientId: string | null) {
-    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    if (!kitchenPrinter) return;
     setSendingComanda(true);
     try {
       const client = clientId ? (clients.find((c) => c.id === clientId) ?? null) : null;
@@ -1667,7 +1669,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   }
 
   async function handleReprintLast(clientId: string | null) {
-    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    if (!kitchenPrinter) return;
     setSendingComanda(true);
     try {
       const all = await comandaService.getAllComandas(order.id);
@@ -1730,7 +1732,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
   }
 
   async function handleSendCocina() {
-    if (!kitchenPrinter && !import.meta.env.DEV) return;
+    if (!kitchenPrinter) return;
     const activeClients = clients.filter((c) => c.id !== null);
     if (activeClients.length > 1) {
       setComandaModal("client-select");
@@ -1919,7 +1921,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             <Button size="sm" colorPalette="purple" flex="1" onClick={() => { setAddProductsClientId(clients[0]?.id ?? null); setAddProductsModal(true); }}>
               <Plus size={14} />Agregar Productos
             </Button>
-            {(kitchenPrinter || import.meta.env.DEV) ? (
+            {kitchenPrinter ? (
               <Button size="sm" colorPalette="orange" variant="outline" flex="1" loading={sendingComanda} disabled={!hasItems} onClick={() => void handleSendCocina()}>
                 <Flame size={14} />Enviar a Cocina
               </Button>
@@ -1950,8 +1952,8 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
               </Button>
               {moreOpen && (
                 <Box position="absolute" bottom="110%" right="0" bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" boxShadow="lg" py="1" minW="170px" zIndex="popover">
-                  {hasItems && <ContextMenuItem label={printingPreTicket ? "Generando..." : "Pre-ticket"} onClick={() => { if (!printingPreTicket) void handlePreTicket(); }} />}
-                  {(kitchenPrinter || import.meta.env.DEV) && <ContextMenuItem label="Reimprimir Comanda" onClick={() => void openReprintMenu()} />}
+                  <ContextMenuItem label={printingPreTicket ? "Generando..." : "Pre-factura"} disabled={!hasItems || (!hasPrinter && !printingPreTicket)} tooltip={!hasPrinter ? "Configura una impresora de caja en Configuracion" : undefined} onClick={() => { if (!printingPreTicket) void handlePreTicket(); }} />
+                  {kitchenPrinter && <ContextMenuItem label="Reimprimir Comanda" onClick={() => void openReprintMenu()} />}
                   <ContextMenuItem label="Cerrar mesa" danger onClick={() => { setMoreOpen(false); setCancelConfirm(true); }} />
                 </Box>
               )}
@@ -3628,20 +3630,21 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
   );
 }
 
-function ContextMenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
-  return (
+function ContextMenuItem({ label, onClick, danger, disabled, tooltip }: { label: string; onClick: () => void; danger?: boolean; disabled?: boolean; tooltip?: string }) {
+  const item = (
     <Box
       px="4"
       py="2"
       fontSize="sm"
-      cursor="pointer"
-      color={danger ? "red.600" : "gray.800"}
-      _hover={{ bg: danger ? "red.50" : "gray.50" }}
-      onClick={onClick}
+      cursor={disabled ? "not-allowed" : "pointer"}
+      color={disabled ? "gray.400" : danger ? "red.600" : "gray.800"}
+      _hover={{ bg: disabled ? undefined : danger ? "red.50" : "gray.50" }}
+      onClick={disabled ? undefined : onClick}
     >
       {label}
     </Box>
   );
+  return tooltip ? <Tip text={tooltip}>{item}</Tip> : item;
 }
 
 function ModalOverlay({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {

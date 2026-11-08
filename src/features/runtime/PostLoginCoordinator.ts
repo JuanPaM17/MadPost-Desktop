@@ -7,6 +7,8 @@ import { syncCommandPoller } from "../sync/SyncCommandPoller";
 import { mobileDevicesService } from "../api/MobileDevicesService";
 import { posService } from "../pos/PosService";
 import { businessConfigService, printerService } from "../config/BusinessConfigService";
+import { APP_VERSION } from "../update/UpdateService";
+import { supabaseConnection } from "../../infrastructure/supabase/SupabaseClient";
 import { appCache } from "../../infrastructure/AppCache";
 import { rolesService } from "../roles/RolesService";
 
@@ -87,8 +89,18 @@ class PostLoginCoordinator {
       );
     }
 
+    void this.reportAppVersion(context.tenantId);
     void this.warmupCache();
     runtimeLogger.info("PostLoginCoordinator", "Inicializacion posterior al login completada.", { tenantId: context.tenantId });
+  }
+
+  private async reportAppVersion(tenantId: string) {
+    try {
+      await supabaseConnection.getClient().from("tenants").update({ app_version: APP_VERSION }).eq("id", tenantId);
+      runtimeLogger.info("PostLoginCoordinator", "app_version reportada.", { version: APP_VERSION });
+    } catch (error) {
+      runtimeLogger.error("PostLoginCoordinator", "No fue posible reportar app_version.", error);
+    }
   }
 
   private async warmupCache() {

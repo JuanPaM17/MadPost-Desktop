@@ -18,6 +18,12 @@ export function BackupView() {
   const [entries, setEntries] = useState<BackupEntry[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [nextBackup, setNextBackup] = useState<Date | null>(() => backupScheduler.getNextScheduledTime());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNextBackup(backupScheduler.getNextScheduledTime()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const verifyR2 = useCallback(async () => {
     setR2Status({ state: "checking" });
@@ -57,10 +63,9 @@ export function BackupView() {
     catch (error) { notify.error("No fue posible abrir la carpeta de copias.", error instanceof Error ? error.message : undefined); }
   }
 
-  const next = backupScheduler.getNextScheduledTime();
   return <Box maxW="1080px" mx="auto"><Stack gap="5">
     <Card><Heading size="sm">Estado</Heading><Flex mt="5" gap="5" direction={{ base: "column", md: "row" }}>
-      <StatusItem icon={<DatabaseBackup size={19} />} title="Proximo backup automatico" detail={next ? formatDate(next) : "Calculando..."} note="Programados a las 5:30 PM y 11:00 PM diariamente." />
+      <StatusItem icon={<DatabaseBackup size={19} />} title="Proximo backup automatico" detail={nextBackup ? formatDate(nextBackup) : "Calculando..."} note="Programados a las 5:30 PM y 11:00 PM diariamente. Al abrir caja: backup inmediato y cada hora mientras este abierta." />
       <StatusItem icon={online ? <Wifi size={19} /> : <WifiOff size={19} />} title="Conectividad a internet" detail={online ? "Internet disponible" : "Sin internet"} tone={online ? "green" : "orange"} note={online ? "Las copias pendientes pueden subirse a la nube." : "Las copias quedan locales hasta recuperar la conexion."} />
       <Box flex="1"><Flex align="center" justify="space-between" gap="3"><Flex gap="2" align="center"><Cloud size={19} /><Text fontWeight="semibold">Solo Nube</Text></Flex><Button size="xs" variant="outline" onClick={() => void verifyR2()} disabled={r2Status.state === "checking"}>Verificar</Button></Flex><R2Badge status={r2Status} /></Box>
     </Flex></Card>

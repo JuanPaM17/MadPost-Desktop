@@ -1,13 +1,14 @@
 import { Badge, Box, Button, Flex, Heading, Input, Spinner, Text } from "@chakra-ui/react";
 import { invoke } from "@tauri-apps/api/core";
-import { CircleAlert, Flame, LockKeyhole, MessageSquare, Minus, Pencil, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
+import { CircleAlert, Flame, LockKeyhole, MessageSquare, Minus, Pencil, Plus, Printer, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cashRegisterService, type CashSession } from "../cashregister/CashRegisterService";
-import { businessConfigService, printerService, type DeliveryType } from "../config/BusinessConfigService";
+import { businessConfigService, DEV_PRINTER_NAME, printerService, type DeliveryType } from "../config/BusinessConfigService";
 import { notify } from "../../components/ui/AppToaster";
 import { Tip } from "../../components/ui/Tip";
 import { HelpButton } from "../../components/ui/HelpButton";
 import { posService, type PosAddition, type PosCategory, type PosCombo, type PosProduct, type PosSauce } from "./PosService";
+import { setDevReceiptPreviewCallback } from "./SaleService";
 import { AdditionsModal, CategoryBar, filterItems, money, ProductGrid, SaucesModal, SupplyAskModal, type AskSupply, type CartChild, type CartItem, type PosGridItem, type SelectedCategory } from "./ProductCatalog";
 
 type PosStatus = "loading" | "open" | "closed" | "error";
@@ -127,12 +128,17 @@ function CartPanel({ cash, active, items, additions, sauces, maxSauces, total, o
   const [checkout, setCheckout] = useState(false);
   const [deliveryTypes, setDeliveryTypes] = useState<DeliveryType[]>([]);
   const [hasPrinter, setHasPrinter] = useState(false);
+  const [devReceiptLines, setDevReceiptLines] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    setDevReceiptPreviewCallback((lines) => setDevReceiptLines(lines));
+  }, []);
   const [bizSettings, setBizSettings] = useState<Awaited<ReturnType<typeof businessConfigService.load>> | null>(null);
   useEffect(() => {
     if (!active) return;
     void businessConfigService.deliveryTypes().then(setDeliveryTypes).catch(() => {});
     void Promise.all([printerService.list(), businessConfigService.load()]).then(([printers, settings]) => {
-      setHasPrinter(Boolean(settings.printerReceipt && printers.includes(settings.printerReceipt)));
+      setHasPrinter(Boolean(settings.printerReceipt && (printers.includes(settings.printerReceipt) || (import.meta.env.DEV && settings.printerReceipt === DEV_PRINTER_NAME))));
       setBizSettings(settings);
     }).catch(() => {});
   }, [active]);
@@ -171,6 +177,22 @@ function CartPanel({ cash, active, items, additions, sauces, maxSauces, total, o
     {checkout ? <CheckoutModal cash={cash} items={items} additions={additions} sauces={sauces} subtotal={total} deliveryTypes={deliveryTypes} hasPrinter={hasPrinter} bizSettings={bizSettings} onClose={() => setCheckout(false)} onConfirmed={onClear} /> : null}
     {sauceTarget ? <SaucesModal name={sauceName} sauces={sauces} maxSauces={maxSauces} selected={selectedSauces} onClose={() => setSauceTarget(null)} onToggle={(sauceId) => sauceTarget.childId ? onChildSauceToggle(sauceTarget.key, sauceTarget.childId, sauceId) : onSauceToggle(sauceTarget.key, sauceId)} /> : null}
     {(() => { const editItem = supplyEditKey ? items.find((i) => i.key === supplyEditKey) : null; return editItem ? <SupplyAskModal name={editItem.name} supplies={editItem.askSupplies} onClose={() => setSupplyEditKey(null)} onConfirm={(confirmed) => { const skipped = confirmed.filter((s) => s.skip).map((s) => s.supplyId); onSkippedSuppliesChange(editItem.key, skipped, confirmed); setSupplyEditKey(null); }} /> : null; })()}
+    {import.meta.env.DEV && devReceiptLines && (
+      <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5">
+        <Box w="full" maxW="420px" bg="white" borderRadius="md" boxShadow="2xl" overflow="hidden">
+          <Flex px="4" py="3" borderBottomWidth="1px" borderColor="gray.200" align="center" justify="space-between">
+            <Flex align="center" gap="2"><Printer size={16} /><Text fontWeight="bold" fontSize="sm">Preview Recibo (DEV)</Text></Flex>
+            <Button size="xs" variant="ghost" onClick={() => setDevReceiptLines(null)}><X size={14} /></Button>
+          </Flex>
+          <Box as="pre" fontFamily="monospace" fontSize="12px" lineHeight="1.6" p="4" bg="gray.50" overflowY="auto" maxH="60vh" whiteSpace="pre-wrap">
+            {devReceiptLines.join("\n")}
+          </Box>
+          <Flex px="4" py="3" justify="end" borderTopWidth="1px" borderColor="gray.200">
+            <Button size="sm" onClick={() => setDevReceiptLines(null)}>Cerrar</Button>
+          </Flex>
+        </Box>
+      </Flex>
+    )}
   </Flex>;
 }
 type PayMethod = "cash" | "card" | "split";

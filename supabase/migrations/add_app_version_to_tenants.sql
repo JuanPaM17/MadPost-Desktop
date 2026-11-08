@@ -1,0 +1,2 @@
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS app_version TEXT;

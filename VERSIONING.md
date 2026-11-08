@@ -33,17 +33,83 @@ Se incrementa cuando hay cambios que rompen compatibilidad hacia atras.
 
 ---
 
-## Etiquetas de pre-lanzamiento
+## Pre-releases: cuando usarlos y como publicarlos
 
-Para pruebas antes de un release oficial:
+Un pre-release es una version real del instalador que se publica en GitHub pero **no se ofrece al publico general**. Solo los clientes que tengan activado el flag `prerelease_access` en su licencia la reciben.
 
+### Cuando usar un pre-release (no un release normal)
+
+- Funcionalidad nueva grande que quieres probar con uno o dos clientes antes de darsela a todos
+- Cambio de riesgo medio-alto: nueva pantalla, refactor de flujo de caja, nuevo modulo
+- Version que necesita validacion en produccion real antes de ser la "oficial"
+- Nunca uses pre-release para un bug fix urgente -- eso va directo como release normal
+
+### Cuando NO usar un pre-release
+
+- Bug fix o correccion pequeña -- va directo como release normal (patch)
+- Una funcion ya probada que quieres darle a todos de una vez
+
+### Reglas importantes de pre-releases
+
+1. **Un pre-release NUNCA va en `update-config.json`** -- ni como `latestVersion` ni como `minimumVersion`. El `update-config.json` solo refleja releases oficiales.
+2. **Un pre-release no puede ser version minima obligatoria** -- no puedes forzar a clientes sin acceso a instalar algo que no ven.
+3. El numero de version del pre-release debe ser mayor al `latestVersion` actual en `update-config.json`. Ejemplo: si `latestVersion` es `1.8.0`, el pre-release puede ser `1.9.0`.
+4. Cuando el pre-release se aprueba y pasa a release oficial, se actualiza `update-config.json` con ese numero y se crea un nuevo release normal (o se edita el existente quitando el flag `--prerelease`).
+
+### Como publicar un pre-release
+
+#### Paso 1 — Actualizar version en los cuatro archivos (igual que un release normal)
+
+`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` con el nuevo numero.
+
+**NO tocar `update-config.json`** -- ese archivo queda apuntando al ultimo release oficial.
+
+#### Paso 2 — Commit, tag y push
+
+```bash
+git add -A
+git commit -m "feat: vX.Y.Z - descripcion breve (pre-release)"
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
 ```
-2.0.0-alpha.1   -> pruebas internas, puede tener bugs graves
-2.0.0-beta.1    -> pruebas mas amplias, mas estable
-2.0.0           -> release oficial
+
+#### Paso 3 — Build
+
+```bash
+npm run tauri build
 ```
 
-En MadPost esto se usaria si se hace un cambio MAJOR y se quiere probar antes de darlo a clientes.
+#### Paso 4 — Crear el release en GitHub con flag `--prerelease`
+
+```bash
+gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64-setup.exe" \
+  --title "vX.Y.Z — Nombre descriptivo" \
+  --notes "Descripcion de cambios" \
+  --prerelease
+```
+
+El flag `--prerelease` es lo que hace que GitHub marque el release como pre-release. La app desktop lo detecta por el campo `prerelease: true` que devuelve la API de GitHub.
+
+#### Paso 5 — Activar acceso en el cliente de prueba
+
+En el panel de administracion de licencias (`/admin/licenses`), haz clic en el icono de cohete de la licencia del cliente que va a probar. El cohete se pone naranja cuando el acceso esta activo.
+
+Desde ese momento, cuando ese cliente abra la pantalla de Actualizaciones vera la nueva version disponible con la etiqueta `(Pre-release)`.
+
+### Promover un pre-release a release oficial
+
+Dos opciones:
+
+**Opcion A** (recomendada si no hubo cambios): edita el release en GitHub, desmarca "Pre-release" y marca "Latest release". Luego actualiza `update-config.json` con ese numero.
+
+**Opcion B**: crea un release oficial nuevo con el mismo numero de version:
+```bash
+gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64-setup.exe" \
+  --title "vX.Y.Z — Nombre descriptivo" \
+  --notes "Descripcion de cambios"
+```
+(sin `--prerelease`). Luego actualiza `update-config.json`.
 
 ---
 
@@ -123,6 +189,31 @@ Regla de oro: si subes una migracion de BD que rompe instalaciones viejas -> `mi
 
 ### 4. Commit, tag y push
 
+---
+
+## Deshabilitar una version publicada
+
+Si ya publicaste una version oficial y necesitas que nadie mas la reciba como actualizacion (bug critico, build incorrecto) sin eliminarla de GitHub:
+
+### Paso 1 — Bajar `update-config.json` a la version anterior buena
+
+```json
+{
+  "latestVersion": "1.4.0",
+  "minimumVersion": "1.3.0"
+}
+```
+
+Esto hace que la app ya no ofrezca `1.5.0` como actualizacion. Los clientes que ya la instalaron no se ven afectados.
+
+### Paso 2 — Publicar la version corregida
+
+Publica la correccion con un nuevo numero (ej. `1.5.1`) y actualiza `update-config.json` normalmente. No re-uses el numero anterior.
+
+> Si el problema es en un pre-release, simplemente no actives el acceso en mas clientes y corrige en la siguiente version. Los pre-releases no tocan `update-config.json` asi que no hay nada que revertir.
+
+---
+
 ```bash
 git add -A
 git commit -m "feat: vX.Y.Z - descripcion breve para el publico, no ser tan tecnico"
@@ -152,6 +243,17 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 ---
 
 ## Historial de versiones
+
+### v1.8.0 — Copias de seguridad automaticas mientras trabajas
+
+**Corregido:**
+- Los tickets, comandas de cocina y pre-tickets ya no muestran caracteres extraños al imprimir productos con tildes, ñ u otros caracteres especiales. La correccion iniciada en v1.7.1 ahora queda completamente resuelta.
+
+**Nuevo:**
+- Mientras la caja este abierta, MadPost guarda una copia de seguridad de tus datos cada hora de forma automatica, sin que tengas que hacer nada.
+- Antes de instalar una actualizacion, MadPost guarda automaticamente una copia del instalador de la version actual, para que siempre puedas volver a ella si lo necesitas.
+
+---
 
 ### v1.7.1 — Correccion de caracteres en impresion
 

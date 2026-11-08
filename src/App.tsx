@@ -15,6 +15,7 @@ import { configService } from "./features/setup/ConfigService";
 import { rolesService } from "./features/roles/RolesService";
 import { UpdateDialog } from "./features/update/UpdateDialog";
 import { updateService, type UpdateInfo } from "./features/update/UpdateService";
+import { backupService } from "./features/backup/BackupService";
 import { sessionContext } from "./core/session/SessionContext";
 import { auditService } from "./features/audit/AuditService";
 import { databaseManager } from "./infrastructure/sqlite/DatabaseManager";
@@ -136,7 +137,7 @@ function App() {
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
-    {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={pendingUpdate.forced ? undefined : () => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={() => updateService.install(pendingUpdate)} /> : null}
+    {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={pendingUpdate.forced ? undefined : () => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={async () => { const tenantId = sessionContext.current()?.tenantId; if (tenantId) await backupService.createBackup(tenantId); await updateService.install(pendingUpdate); }} /> : null}
   </>;
 }
 

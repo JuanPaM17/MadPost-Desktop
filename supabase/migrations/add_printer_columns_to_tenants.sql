@@ -1,0 +1,4 @@
+ALTER TABLE tenants
+  ADD COLUMN IF NOT EXISTS printer_receipt  TEXT,
+  ADD COLUMN IF NOT EXISTS printer_kitchen  TEXT,
+  ADD COLUMN IF NOT EXISTS comanda_copies   INTEGER NOT NULL DEFAULT 1;

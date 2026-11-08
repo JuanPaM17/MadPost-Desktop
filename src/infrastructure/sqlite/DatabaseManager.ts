@@ -219,6 +219,12 @@ const migrations = [
     note        TEXT
   )`,
   "CREATE INDEX IF NOT EXISTS idx_audit_log_items_audit ON audit_log_items(audit_id)",
+  `CREATE TABLE IF NOT EXISTS backup_schedule (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    last_backup_at  TEXT,
+    cash_opened_at  TEXT,
+    cash_closed_at  TEXT
+  )`,
 ];
 
 const PROD_DB = "sqlite:madpost.db";
@@ -345,6 +351,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "tenants", "printer_receipt", "TEXT");
     await this.ensureColumn(database, "tenants", "printer_kitchen", "TEXT");
     await this.ensureColumn(database, "tenants", "comanda_copies", "INTEGER");
+    await this.ensureColumn(database, "tenants", "app_version", "TEXT");
     await this.ensureColumn(database, "tenants", "delivery_whatsapp", "TEXT");
     await this.ensureColumn(database, "tenants", "mobile_server_enabled", "INTEGER NOT NULL DEFAULT 0");
     await this.ensureColumn(database, "table_order_clients", "notes", "TEXT");

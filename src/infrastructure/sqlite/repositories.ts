@@ -269,3 +269,27 @@ export const quickLinksRepository = {
     }
   },
 };
+
+type BackupScheduleRow = { last_backup_at: string | null; cash_opened_at: string | null; cash_closed_at: string | null };
+
+export const backupScheduleRepository = {
+  async load(): Promise<BackupScheduleRow> {
+    const database = await databaseManager.database();
+    await database.execute("INSERT OR IGNORE INTO backup_schedule(id) VALUES(1)");
+    const rows = await database.select<BackupScheduleRow[]>("SELECT last_backup_at, cash_opened_at, cash_closed_at FROM backup_schedule WHERE id=1");
+    return rows[0] ?? { last_backup_at: null, cash_opened_at: null, cash_closed_at: null };
+  },
+  async setCashOpened(at: string) {
+    const database = await databaseManager.database();
+    await database.execute("INSERT OR IGNORE INTO backup_schedule(id) VALUES(1)");
+    await database.execute("UPDATE backup_schedule SET cash_opened_at=$1 WHERE id=1", [at]);
+  },
+  async setCashClosed(at: string) {
+    const database = await databaseManager.database();
+    await database.execute("UPDATE backup_schedule SET cash_closed_at=$1 WHERE id=1", [at]);
+  },
+  async setLastBackup(at: string) {
+    const database = await databaseManager.database();
+    await database.execute("UPDATE backup_schedule SET last_backup_at=$1 WHERE id=1", [at]);
+  },
+};

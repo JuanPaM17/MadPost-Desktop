@@ -1,7 +1,8 @@
 import { licenseService } from "../features/license/LicenseService";
 import { migrationService } from "../features/migration/MigrationService";
 import { databaseManager } from "../infrastructure/sqlite/DatabaseManager";
-import { licenseRepository, tenantRepository } from "../infrastructure/sqlite/repositories";
+import { licenseRepository, metaRepository, tenantRepository } from "../infrastructure/sqlite/repositories";
+import { APP_VERSION } from "../features/update/UpdateService";
 
 export type StartupResult =
   | { screen: "license"; online: boolean }
@@ -13,6 +14,8 @@ export async function startApplication(onSessionInvalidated: (reason: "blocked" 
   // if (await migrationService.javaDbExists()) {
   //   databaseManager.enableDualWrite();
   // }
+
+  void metaRepository.set("app_version", APP_VERSION);
 
   const anyCached = await licenseRepository.getAnyCached();
 

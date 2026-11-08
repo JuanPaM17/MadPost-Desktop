@@ -6,7 +6,7 @@ import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { PaginationControls } from "../../components/ui/PaginationControls";
 import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { Tip } from "../../components/ui/Tip";
-import { businessConfigService, printerService } from "../config/BusinessConfigService";
+import { businessConfigService, DEV_PRINTER_NAME, printerService } from "../config/BusinessConfigService";
 import { notify } from "../../components/ui/AppToaster";
 import { setDevReceiptPreviewCallback } from "../pos/SaleService";
 import { invoke } from "@tauri-apps/api/core";
@@ -501,7 +501,7 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
   useEffect(() => {
     void Promise.all([businessConfigService.load(), printerService.list()]).then(([cfg, printers]) => {
       setBizConfig({ phone: cfg.phone, printerReceipt: cfg.printerReceipt, name: cfg.name, address: cfg.address, taxId: cfg.taxId, invoiceFooter: cfg.invoiceFooter, logoPath: cfg.logoPath });
-      setHasPrinter(Boolean(cfg.printerReceipt && printers.includes(cfg.printerReceipt)));
+      setHasPrinter(Boolean(cfg.printerReceipt && (printers.includes(cfg.printerReceipt) || (import.meta.env.DEV && cfg.printerReceipt === DEV_PRINTER_NAME))));
       const digits = cfg.phone.replace(/\D/g, "");
       setHasPhone(digits.length >= 7);
     }).catch(() => {});
@@ -867,8 +867,8 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
           <Separator my="4" />
           <Grid templateColumns="1fr 1fr" gap="2">
             {/* Reimprimir */}
-            <Tip text={hasPrinter || import.meta.env.DEV ? "Imprimir ticket en caja" : "Sin impresora de caja configurada"}>
-              <Button size="sm" variant="outline" w="full" disabled={(!hasPrinter && !import.meta.env.DEV) || printBusy} loading={printBusy} onClick={() => void handlePrint()}>
+            <Tip text={hasPrinter ? "Imprimir ticket en caja" : "Sin impresora de caja configurada"}>
+              <Button size="sm" variant="outline" w="full" disabled={!hasPrinter || printBusy} loading={printBusy} onClick={() => void handlePrint()}>
                 <Printer size={15} />Imprimir
               </Button>
             </Tip>

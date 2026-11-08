@@ -10,7 +10,7 @@ const columns = (specification: string[]) => specification.map((entry) => entry.
 
 // This is intentionally explicit: it is the shared SQLite/Supabase contract and prevents accidental fields from being uploaded.
 export const FULL_SYNC_TABLES = [
-  ["tenants", columns(["id", "name", "logo_path", "address", "phone", "tax_id", "invoice_footer", "created_at", "updated_at", "max_sauces"])],
+  ["tenants", columns(["id", "name", "logo_path", "address", "phone", "tax_id", "invoice_footer", "created_at", "updated_at", "max_sauces", "printer_receipt", "printer_kitchen", "comanda_copies", "app_version"])],
   ["users", columns(["id", "tenant_id", "username", "password_hash", "display_name", "role", "active::bool", "created_at", "updated_at"])],
   ["categories", columns(["id", "tenant_id", "name", "sort_order", "show_additions::bool", "show_sauces::bool", "hidden::bool", "created_at", "updated_at"])],
   ["products", columns(["id", "tenant_id", "category_id", "name", "price", "image_path", "active::bool", "created_at", "updated_at", "stock", "description"])],
@@ -124,6 +124,7 @@ const COERCE_NULL: Record<string, string | number | boolean> = {
   stock: 0,
   quantity_per_sale: 1,
   low_stock_threshold: 0,
+  comanda_copies: 1,
 };
 
 // Numeric columns that may arrive as empty string "" from imports — coerce to null.
