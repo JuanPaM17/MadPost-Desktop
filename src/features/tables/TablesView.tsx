@@ -1324,7 +1324,7 @@ function TablePanel({ table, onClose, onTableOpened, onTableClosed, onComandaSen
       right="0"
       bottom="0"
       zIndex="10"
-      w="420px"
+      w="520px"
       bg="white"
       boxShadow="-4px 0 24px rgba(0,0,0,0.10)"
       display="flex"

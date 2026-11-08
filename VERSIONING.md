@@ -153,6 +153,13 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.7.1 — Correccion de caracteres en impresion
+
+**Corregido:**
+- Los tickets, comandas de cocina y pre-tickets ya no muestran caracteres extraños al imprimir productos con tildes, ñ u otros caracteres especiales. Antes aparecian simbolos como ├ón o caracteres ilegibles; ahora el texto se imprime correctamente en la impresora termica.
+
+---
+
 ### v1.7.0 — Control de insumos por venta, ajustes de inventario y mejoras en mesas
 
 **Nuevo:**

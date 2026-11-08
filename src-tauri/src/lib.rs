@@ -106,6 +106,34 @@ fn save_and_open_invoice_pdf(app: tauri::AppHandle, session_number: u32, file_na
 }
 
 #[tauri::command]
+/// Convierte un string UTF-8 a bytes CP850 para impresoras termicas.
+/// Los caracteres sin equivalente en CP850 se reemplazan por '?'.
+fn to_cp850(s: &str) -> Vec<u8> {
+    s.chars().map(|c| match c {
+        // ASCII directo
+        '\x00'..='\x7F' => c as u8,
+        // Letras con acento y especiales latinos en CP850
+        'Ç' => 0x80, 'ü' => 0x81, 'é' => 0x82, 'â' => 0x83, 'ä' => 0x84,
+        'à' => 0x85, 'å' => 0x86, 'ç' => 0x87, 'ê' => 0x88, 'ë' => 0x89,
+        'è' => 0x8A, 'ï' => 0x8B, 'î' => 0x8C, 'ì' => 0x8D, 'Ä' => 0x8E,
+        'Å' => 0x8F, 'É' => 0x90, 'æ' => 0x91, 'Æ' => 0x92, 'ô' => 0x93,
+        'ö' => 0x94, 'ò' => 0x95, 'û' => 0x96, 'ù' => 0x97, 'ÿ' => 0x98,
+        'Ö' => 0x99, 'Ü' => 0x9A, 'ø' => 0x9B, '£' => 0x9C, 'Ø' => 0x9D,
+        '×' => 0x9E, 'ƒ' => 0x9F, 'á' => 0xA0, 'í' => 0xA1, 'ó' => 0xA2,
+        'ú' => 0xA3, 'ñ' => 0xA4, 'Ñ' => 0xA5, 'ª' => 0xA6, 'º' => 0xA7,
+        '¿' => 0xA8, '®' => 0xA9, '¬' => 0xAA, '½' => 0xAB, '¼' => 0xAC,
+        '¡' => 0xAD, '«' => 0xAE, '»' => 0xAF, 'À' => 0xB5, 'Á' => 0xB6,
+        'Â' => 0xB7, 'È' => 0xD4, 'Ê' => 0xD2, 'Ë' => 0xD3, 'Í' => 0xD6,
+        'Î' => 0xD7, 'Ï' => 0xD8, 'Ì' => 0xDE, 'Ó' => 0xE0, 'ß' => 0xE1,
+        'Ô' => 0xE2, 'Ò' => 0xE3, 'õ' => 0xE4, 'Õ' => 0xE5, 'µ' => 0xE6,
+        'Þ' => 0xE7, 'Ú' => 0xE9, 'Û' => 0xEA, 'Ù' => 0xEB, 'ý' => 0xEC,
+        'Ý' => 0xED, '¯' => 0xEE, '´' => 0xEF, '­' => 0xF0, '±' => 0xF1,
+        '‗' => 0xF2, '¾' => 0xF3, '¶' => 0xF4, '§' => 0xF5, '÷' => 0xF6,
+        '¸' => 0xF7, '°' => 0xF8, '¨' => 0xF9, '·' => 0xFA, '¹' => 0xFB,
+        '³' => 0xFC, '²' => 0xFD, _ => b'?' as char,
+    } as u8).collect()
+}
+
 fn print_comanda(printer_name: String, lines: Vec<String>) -> Result<(), String> {
     let mut bytes: Vec<u8> = Vec::new();
     // ESC/POS init
@@ -118,7 +146,7 @@ fn print_comanda(printer_name: String, lines: Vec<String>) -> Result<(), String>
         if bold { bytes.extend_from_slice(&[0x1B, 0x45, 0x01]); }
         // Left alignment after header
         if i == 3 { bytes.extend_from_slice(&[0x1B, 0x61, 0x00]); }
-        bytes.extend_from_slice(line.as_bytes());
+        bytes.extend_from_slice(&to_cp850(line));
         bytes.push(b'\n');
         if bold { bytes.extend_from_slice(&[0x1B, 0x45, 0x00]); }
     }
