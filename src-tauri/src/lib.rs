@@ -105,7 +105,6 @@ fn save_and_open_invoice_pdf(app: tauri::AppHandle, session_number: u32, file_na
     Ok(target.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 /// Convierte un string UTF-8 a bytes CP850 para impresoras termicas.
 /// Los caracteres sin equivalente en CP850 se reemplazan por '?'.
 fn to_cp850(s: &str) -> Vec<u8> {
@@ -130,10 +129,11 @@ fn to_cp850(s: &str) -> Vec<u8> {
         'Ý' => 0xED, '¯' => 0xEE, '´' => 0xEF, '­' => 0xF0, '±' => 0xF1,
         '‗' => 0xF2, '¾' => 0xF3, '¶' => 0xF4, '§' => 0xF5, '÷' => 0xF6,
         '¸' => 0xF7, '°' => 0xF8, '¨' => 0xF9, '·' => 0xFA, '¹' => 0xFB,
-        '³' => 0xFC, '²' => 0xFD, _ => b'?' as char,
-    } as u8).collect()
+        '³' => 0xFC, '²' => 0xFD, _ => b'?',
+    }).collect()
 }
 
+#[tauri::command]
 fn print_comanda(printer_name: String, lines: Vec<String>) -> Result<(), String> {
     let mut bytes: Vec<u8> = Vec::new();
     // ESC/POS init
