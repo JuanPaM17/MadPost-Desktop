@@ -14,6 +14,7 @@ export type TableOrderItem = {
   table_order_client_id: string | null;
   notes: string | null;
   original_unit_price: number | null;
+  skipped_supplies: string | null;
   additions: { name: string; quantity: number; price: number }[];
   sauces: { name: string }[];
 };
@@ -92,7 +93,7 @@ export const tableOrderService = {
          ))`
       : "";
     const rows = await db.select<Omit<TableOrderItem, "additions" | "sauces">[]>(
-      `SELECT i.id, i.table_order_id, i.product_id, i.product_name, i.quantity, i.unit_price, i.subtotal, i.selected_option, i.combo_id, i.combo_table_order_item_id, i.table_order_client_id, i.notes, i.original_unit_price
+      `SELECT i.id, i.table_order_id, i.product_id, i.product_name, i.quantity, i.unit_price, i.subtotal, i.selected_option, i.combo_id, i.combo_table_order_item_id, i.table_order_client_id, i.notes, i.original_unit_price, i.skipped_supplies
        FROM table_order_items i
        WHERE i.table_order_id = $1 ${cancelFilter}
        ORDER BY i.rowid ASC`,
@@ -252,6 +253,12 @@ export const tableOrderService = {
     await db.execute("UPDATE table_order_items SET selected_option=$1, updated_at=$2 WHERE id=$3", [selectedOption, instantNow(), itemId]);
   },
 
+  async updateSkippedSupplies(itemId: string, skippedSupplyIds: string[]): Promise<void> {
+    const db = await databaseManager.database();
+    const json = skippedSupplyIds.length > 0 ? JSON.stringify(skippedSupplyIds) : null;
+    await db.execute("UPDATE table_order_items SET skipped_supplies=$1 WHERE id=$2", [json, itemId]);
+  },
+
   async replaceItemAdditions(itemId: string, additions: { id: string; name: string; price: number; quantity: number }[]): Promise<void> {
     const db = await databaseManager.database();
     await db.execute("DELETE FROM table_order_item_additions WHERE table_order_item_id=$1", [itemId]);
@@ -327,15 +334,17 @@ export const tableOrderService = {
     comboParentItemId: string | null;
     additions: { id: string; name: string; price: number; quantity: number }[];
     sauces: { id: string; name: string }[];
+    skippedSupplies?: string[];
   }): Promise<string> {
     const db = await databaseManager.database();
     const itemId = uuid();
     const now = instantNow();
     const additionsTotal = params.additions.reduce((s, a) => s + a.price * a.quantity, 0);
     const subtotal = (params.unitPrice + additionsTotal) * params.quantity;
+    const skippedJson = params.skippedSupplies && params.skippedSupplies.length > 0 ? JSON.stringify(params.skippedSupplies) : null;
     await db.execute(
-      "INSERT INTO table_order_items(id, table_order_id, product_id, product_name, quantity, unit_price, subtotal, added_at, selected_option, table_order_client_id, combo_id, combo_table_order_item_id, original_unit_price) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-      [itemId, params.orderId, params.productId, params.productName, params.quantity, params.unitPrice, subtotal, now, params.selectedOption, params.clientId, params.comboId, params.comboParentItemId, params.unitPrice],
+      "INSERT INTO table_order_items(id, table_order_id, product_id, product_name, quantity, unit_price, subtotal, added_at, selected_option, table_order_client_id, combo_id, combo_table_order_item_id, original_unit_price, skipped_supplies) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+      [itemId, params.orderId, params.productId, params.productName, params.quantity, params.unitPrice, subtotal, now, params.selectedOption, params.clientId, params.comboId, params.comboParentItemId, params.unitPrice, skippedJson],
     );
     for (const addition of params.additions) {
       if (addition.quantity <= 0) continue;

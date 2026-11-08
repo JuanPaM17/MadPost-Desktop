@@ -160,7 +160,12 @@ const migrations = [
   )`,
   `CREATE TABLE IF NOT EXISTS stock_logs (
     id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id TEXT, user_name TEXT, item_type TEXT, item_id TEXT,
-    item_name TEXT, delta REAL, stock_before REAL, stock_after REAL, created_at TEXT
+    item_name TEXT, delta REAL, stock_before REAL, stock_after REAL, created_at TEXT, reason TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS sale_item_supplies (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, sale_item_id TEXT NOT NULL, supply_id TEXT,
+    supply_name TEXT NOT NULL, deducted INTEGER NOT NULL DEFAULT 1, quantity_deducted REAL NOT NULL DEFAULT 0,
+    skipped_reason TEXT, created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY,
@@ -349,6 +354,9 @@ class DatabaseManager {
     await this.ensureColumn(database, "tenants", "react_migrated", "INTEGER NOT NULL DEFAULT 0");
     await this.ensureColumn(database, "licenses_cache", "device_blocked", "INTEGER NOT NULL DEFAULT 0");
     await this.ensureColumn(database, "restaurant_tables", "color", "TEXT");
+    await this.ensureColumn(database, "product_supplies", "deduct_mode", "TEXT NOT NULL DEFAULT 'always'");
+    await this.ensureColumn(database, "stock_logs", "reason", "TEXT");
+    await this.ensureColumn(database, "table_order_items", "skipped_supplies", "TEXT");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     await this.dropRoleCheckConstraint(database);
     return database;

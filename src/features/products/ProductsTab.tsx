@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { notify } from "../../components/ui/AppToaster";
 import { PaginationControls } from "../../components/ui/PaginationControls";
 import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
-import { productService, type Product, type ProductOption, type ProductSupply, type ProductSupplyOption } from "./ProductService";
+import { productService, type DeductMode, type Product, type ProductOption, type ProductSupply, type ProductSupplyOption } from "./ProductService";
 import { appCache } from "../../infrastructure/AppCache";
 
 type StockMode = "infinite" | "direct" | "supplies";
@@ -60,7 +60,7 @@ function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupp
   const visibleSupplies = sortedSupplies.filter((supply) => !query || supply.name.toLowerCase().includes(query));
   function toggle(supply: ProductSupplyOption, checked: boolean) {
     if (checked) {
-      onLinksChange([...links.filter((link) => link.supplyId !== supply.id), { supplyId: supply.id, quantityPerSale: 1 }]);
+      onLinksChange([...links.filter((link) => link.supplyId !== supply.id), { supplyId: supply.id, quantityPerSale: 1, deductMode: supply.deductMode }]);
       setDrafts((prev) => ({ ...prev, [supply.id]: "1" }));
     } else {
       onLinksChange(links.filter((link) => link.supplyId !== supply.id));
@@ -74,6 +74,9 @@ function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupp
       onLinksChange(links.map((link) => link.supplyId === supplyId ? { ...link, quantityPerSale: quantity } : link));
     }
   }
+  function handleDeductModeChange(supplyId: string, mode: DeductMode) {
+    onLinksChange(links.map((link) => link.supplyId === supplyId ? { ...link, deductMode: mode } : link));
+  }
   function getInputValue(supplyId: string, link: ProductSupply | undefined): string {
     if (supplyId in drafts) return drafts[supplyId];
     if (!link) return "1";
@@ -81,6 +84,7 @@ function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupp
   }
   return <Box mt="4">
     <Text fontSize="sm" color="gray.600">Marca los insumos que consume este producto y ajusta la cantidad por venta.</Text>
+    <Text fontSize="xs" color="gray.500" mt="1"><Text as="span" fontWeight="semibold" color="purple.700">Siempre</Text> descuenta automaticamente al vender. <Text as="span" fontWeight="semibold" color="orange.600">Preguntar</Text> le muestra al cajero un modal para confirmar o saltarse el descuento en cada venta.</Text>
     <Box mt="3" position="relative" maxW="380px"><Search size={16} color="#6b7280" style={{ position: "absolute", left: 11, top: 10, zIndex: 1 }} /><Input pl="9" size="sm" placeholder="Buscar insumo..." value={search} onChange={(event) => setSearch(event.target.value)} /></Box>
     <Stack mt="3" maxH="180px" overflowY="auto" borderWidth="1px" borderColor="gray.200" borderRadius="md" p="2" gap="1">
       {visibleSupplies.map((supply) => {
@@ -88,12 +92,18 @@ function SupplyLinks({ supplies, links, onLinksChange }: { supplies: ProductSupp
         const checked = Boolean(link);
         const inputVal = getInputValue(supply.id, link);
         const valid = !checked || (Number(inputVal) > 0);
-        return <Flex key={supply.id} align="center" gap="3" p="2" borderRadius="sm" bg={checked ? "purple.50" : "transparent"}>
-          <Checkbox.Root checked={checked} onCheckedChange={(details) => toggle(supply, details.checked === true)} flex="1">
+        return <Flex key={supply.id} align="center" gap="2" p="2" borderRadius="sm" bg={checked ? "purple.50" : "transparent"} wrap="wrap">
+          <Checkbox.Root checked={checked} onCheckedChange={(details) => toggle(supply, details.checked === true)} flex="1" minW="120px">
             <Checkbox.HiddenInput /><Checkbox.Control /><Checkbox.Label>{supply.name}</Checkbox.Label>
           </Checkbox.Root>
           <Text fontSize="xs" color="gray.500">Cant.</Text>
-          <Input w="76px" size="sm" inputMode="decimal" disabled={!checked} value={checked ? inputVal : "1"} borderColor={valid ? undefined : "red.500"} onChange={(event) => handleQuantityChange(supply.id, event.target.value)} />
+          <Input w="72px" size="sm" inputMode="decimal" disabled={!checked} value={checked ? inputVal : "1"} borderColor={valid ? undefined : "red.500"} onChange={(event) => handleQuantityChange(supply.id, event.target.value)} />
+          {checked && (
+            <Flex gap="1">
+              <Button size="xs" variant={link?.deductMode === "always" ? "solid" : "outline"} colorPalette={link?.deductMode === "always" ? "purple" : "gray"} onClick={() => handleDeductModeChange(supply.id, "always")}>Siempre</Button>
+              <Button size="xs" variant={link?.deductMode === "ask" ? "solid" : "outline"} colorPalette={link?.deductMode === "ask" ? "orange" : "gray"} onClick={() => handleDeductModeChange(supply.id, "ask")}>Preguntar</Button>
+            </Flex>
+          )}
         </Flex>;
       })}
       {!visibleSupplies.length ? <Text py="5" textAlign="center" color="gray.500" fontSize="sm">No hay insumos disponibles.</Text> : null}

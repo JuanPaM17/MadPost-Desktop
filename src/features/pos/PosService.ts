@@ -83,6 +83,15 @@ class PosService {
     appCache.setCombos(data);
     return data;
   }
+
+  async askSupplies(productId: string): Promise<{ supplyId: string; name: string }[]> {
+    const database = await databaseManager.database();
+    const rows = await database.select<{ supply_id: string; name: string }[]>(
+      "SELECT ps.supply_id, s.name FROM product_supplies ps JOIN supplies s ON s.id=ps.supply_id WHERE ps.product_id=$1 AND ps.deduct_mode='ask'",
+      [productId],
+    );
+    return rows.map((r) => ({ supplyId: r.supply_id, name: r.name }));
+  }
 }
 
 export const posService = new PosService();

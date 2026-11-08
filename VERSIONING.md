@@ -153,6 +153,23 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 
 ## Historial de versiones
 
+### v1.7.0 — Control de insumos por venta, ajustes de inventario y mejoras en mesas
+
+**Nuevo:**
+- Control de descuento de insumos por venta: puedes configurar insumo por insumo si el descuento de stock se hace automatico al vender o si el cajero puede decidirlo en cada venta. Cuando un insumo esta en modo "preguntar", aparece un modal antes de confirmar la venta para que el cajero marque que insumos incluir o no. Util para preparaciones que a veces se hacen sin un ingrediente segun el pedido del cliente.
+- Boton de insumos opcionales en el carrito del punto de venta y en mesas: si un producto tiene insumos en modo "preguntar", aparece un boton de edicion en el item del carrito para revisar o cambiar la seleccion en cualquier momento antes de cobrar.
+- Ajuste de inventario con operaciones rapidas: el formulario de ajuste de stock ahora tiene botones de Sumar, Restar y Reemplazar para hacer cambios sin tener que calcular manualmente el nuevo valor.
+- Decimales en inventario: el formulario de ajuste de insumos ya acepta cantidades con decimales, importante para insumos que se miden por peso o volumen.
+- Filtros en la pantalla de Inventario: puedes filtrar el listado de insumos y productos por nombre y estado de stock directamente desde la pantalla.
+- Insumos vinculados visibles primero al editar un producto: los insumos que ya estan asociados al producto aparecen al inicio de la lista para facilitar la revision.
+
+**Mejorado:**
+- El editor de mesas ya no pregunta confirmacion al clonar una pared decorativa, la duplica directamente.
+- Se corrigieron comportamientos inesperados al arrastrar en el modo de seleccion multiple del editor de mesas.
+- Los combos ahora descuentan correctamente el stock de los productos hijos, sus insumos y sus adiciones, igual que si cada hijo se vendiera por separado.
+
+---
+
 ### v1.6.0 — Mesas mejoradas, busqueda sin tildes y pre-ticket por impresora
 
 **Nuevo:**

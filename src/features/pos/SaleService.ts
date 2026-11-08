@@ -60,6 +60,8 @@ export type SaleItemRequest = {
   /** Metadata needed for stock deduction */
   productId: string;
   categoryName: string | null;
+  /** Supply IDs the cashier opted to skip for this sale */
+  skippedSupplies?: string[];
 };
 
 export type SaleChildRequest = {
@@ -103,6 +105,8 @@ async function deductProductStock(
   productName: string,
   quantity: number,
   invoiceNumber: string,
+  saleItemId: string,
+  skippedSupplyIds: string[] = [],
 ) {
   // Capa 1: stock directo del producto
   const stockRows = await database.select<{ stock: number | null }[]>(
@@ -112,30 +116,64 @@ async function deductProductStock(
   if (stockRows.length > 0) {
     const before = Number(stockRows[0].stock ?? 0);
     const after = before - quantity;
+    const logId1 = crypto.randomUUID();
+    const logAt1 = now();
     await database.execute("UPDATE products SET stock=stock-$1 WHERE id=$2 AND stock IS NOT NULL", [quantity, productId]);
     await database.execute(
       "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at) VALUES($1,$2,$3,$4,'PRODUCT',$5,$6,$7,$8,$9,$10)",
-      [crypto.randomUUID(), tenantId, userId, userName, productId, `${productName} [Factura ${invoiceNumber}]`, -quantity, before, after, now()],
+      [logId1, tenantId, userId, userName, productId, `${productName} [Factura ${invoiceNumber}]`, -quantity, before, after, logAt1],
     );
-    await syncQueueRepository.enqueue("products", productId, "UPDATE", { id: productId, stock: after, updated_at: now() });
+    await syncQueueRepository.enqueue("stock_logs", logId1, "INSERT", { id: logId1, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "PRODUCT", item_id: productId, item_name: `${productName} [Factura ${invoiceNumber}]`, delta: -quantity, stock_before: before, stock_after: after, created_at: logAt1, reason: null });
+    await syncQueueRepository.enqueue("products", productId, "UPDATE", { id: productId, stock: after, updated_at: logAt1 });
   }
 
   // Capa 2: insumos vinculados al producto
-  const supplies = await database.select<{ supply_id: string; name: string; quantity_per_sale: number }[]>(
-    "SELECT ps.supply_id, s.name, ps.quantity_per_sale FROM product_supplies ps JOIN supplies s ON s.id=ps.supply_id WHERE ps.product_id=$1",
+  const supplies = await database.select<{ supply_id: string; name: string; quantity_per_sale: number; deduct_mode: string }[]>(
+    "SELECT ps.supply_id, s.name, ps.quantity_per_sale, ps.deduct_mode FROM product_supplies ps JOIN supplies s ON s.id=ps.supply_id WHERE ps.product_id=$1",
     [productId],
   );
   for (const link of supplies) {
     const toDeduct = Number(link.quantity_per_sale) * quantity;
-    const supplyRows = await database.select<{ stock: number }[]>("SELECT stock FROM supplies WHERE id=$1", [link.supply_id]);
-    const supplyBefore = Number(supplyRows[0]?.stock ?? 0);
-    const supplyAfter = supplyBefore - toDeduct;
-    await database.execute("UPDATE supplies SET stock=stock-$1,updated_at=$2 WHERE id=$3", [toDeduct, now(), link.supply_id]);
-    await database.execute(
-      "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at) VALUES($1,$2,$3,$4,'SUPPLY',$5,$6,$7,$8,$9,$10)",
-      [crypto.randomUUID(), tenantId, userId, userName, link.supply_id, `${link.name} (${productName}) [Factura ${invoiceNumber}]`, -toDeduct, supplyBefore, supplyAfter, now()],
-    );
-    await syncQueueRepository.enqueue("supplies", link.supply_id, "UPDATE", { id: link.supply_id, stock: supplyAfter, updated_at: now() });
+    const isSkipped = link.deduct_mode === "ask" && skippedSupplyIds.includes(link.supply_id);
+
+    if (isSkipped) {
+      const supplyRows = await database.select<{ stock: number }[]>("SELECT stock FROM supplies WHERE id=$1", [link.supply_id]);
+      const currentStock = Number(supplyRows[0]?.stock ?? 0);
+      const skipLogId = crypto.randomUUID();
+      const skipAt = now();
+      const skipName = `${link.name} (${productName}) [Factura ${invoiceNumber}]`;
+      await database.execute(
+        "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at,reason) VALUES($1,$2,$3,$4,'SUPPLY',$5,$6,$7,$8,$9,$10,$11)",
+        [skipLogId, tenantId, userId, userName, link.supply_id, skipName, 0, currentStock, currentStock, skipAt, "SKIP"],
+      );
+      await syncQueueRepository.enqueue("stock_logs", skipLogId, "INSERT", { id: skipLogId, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "SUPPLY", item_id: link.supply_id, item_name: skipName, delta: 0, stock_before: currentStock, stock_after: currentStock, created_at: skipAt, reason: "SKIP" });
+      const sisId = crypto.randomUUID();
+      await database.execute(
+        "INSERT INTO sale_item_supplies(id,tenant_id,sale_item_id,supply_id,supply_name,deducted,quantity_deducted,skipped_reason,created_at) VALUES($1,$2,$3,$4,$5,0,$6,$7,$8)",
+        [sisId, tenantId, saleItemId, link.supply_id, link.name, toDeduct, "CASHIER_SKIP", skipAt],
+      );
+      await syncQueueRepository.enqueue("sale_item_supplies", sisId, "INSERT", { id: sisId, tenant_id: tenantId, sale_item_id: saleItemId, supply_id: link.supply_id, supply_name: link.name, deducted: false, quantity_deducted: toDeduct, skipped_reason: "CASHIER_SKIP", created_at: skipAt });
+    } else {
+      const supplyRows = await database.select<{ stock: number }[]>("SELECT stock FROM supplies WHERE id=$1", [link.supply_id]);
+      const supplyBefore = Number(supplyRows[0]?.stock ?? 0);
+      const supplyAfter = supplyBefore - toDeduct;
+      const supplyLogId = crypto.randomUUID();
+      const supplyAt = now();
+      const supplyLogName = `${link.name} (${productName}) [Factura ${invoiceNumber}]`;
+      await database.execute("UPDATE supplies SET stock=stock-$1,updated_at=$2 WHERE id=$3", [toDeduct, supplyAt, link.supply_id]);
+      await database.execute(
+        "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at) VALUES($1,$2,$3,$4,'SUPPLY',$5,$6,$7,$8,$9,$10)",
+        [supplyLogId, tenantId, userId, userName, link.supply_id, supplyLogName, -toDeduct, supplyBefore, supplyAfter, supplyAt],
+      );
+      await syncQueueRepository.enqueue("stock_logs", supplyLogId, "INSERT", { id: supplyLogId, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "SUPPLY", item_id: link.supply_id, item_name: supplyLogName, delta: -toDeduct, stock_before: supplyBefore, stock_after: supplyAfter, created_at: supplyAt, reason: null });
+      await syncQueueRepository.enqueue("supplies", link.supply_id, "UPDATE", { id: link.supply_id, stock: supplyAfter, updated_at: supplyAt });
+      const sisId = crypto.randomUUID();
+      await database.execute(
+        "INSERT INTO sale_item_supplies(id,tenant_id,sale_item_id,supply_id,supply_name,deducted,quantity_deducted,skipped_reason,created_at) VALUES($1,$2,$3,$4,$5,1,$6,NULL,$7)",
+        [sisId, tenantId, saleItemId, link.supply_id, link.name, toDeduct, supplyAt],
+      );
+      await syncQueueRepository.enqueue("sale_item_supplies", sisId, "INSERT", { id: sisId, tenant_id: tenantId, sale_item_id: saleItemId, supply_id: link.supply_id, supply_name: link.name, deducted: true, quantity_deducted: toDeduct, skipped_reason: null, created_at: supplyAt });
+    }
   }
 }
 
@@ -161,11 +199,15 @@ async function deductAdditionStock(
   if (qpsRows[0]?.stock !== null && qpsRows[0]?.stock !== undefined) {
     const before = Number(qpsRows[0].stock);
     const after = before - toDeduct;
+    const addLogId = crypto.randomUUID();
+    const addAt = now();
+    const addLogName = `${additionName} [Factura ${invoiceNumber}]`;
     await database.execute("UPDATE additions SET stock=stock-$1 WHERE id=$2 AND stock IS NOT NULL", [toDeduct, additionId]);
     await database.execute(
       "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at) VALUES($1,$2,$3,$4,'ADDITION',$5,$6,$7,$8,$9,$10)",
-      [crypto.randomUUID(), tenantId, userId, userName, additionId, `${additionName} [Factura ${invoiceNumber}]`, -toDeduct, before, after, now()],
+      [addLogId, tenantId, userId, userName, additionId, addLogName, -toDeduct, before, after, addAt],
     );
+    await syncQueueRepository.enqueue("stock_logs", addLogId, "INSERT", { id: addLogId, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "ADDITION", item_id: additionId, item_name: addLogName, delta: -toDeduct, stock_before: before, stock_after: after, created_at: addAt, reason: null });
   }
 
 }
@@ -281,7 +323,7 @@ class SaleService {
             original_unit_price: null, category_name: null,
           });
           await this.insertAdditionsAndSauces(database, childId, child.additions, child.sauces, allAdditions, allSauces, item.quantity);
-          await deductProductStock(database, tenantId, userId, userName, child.productId, child.name, child.quantity * item.quantity, invoiceNumber);
+          await deductProductStock(database, tenantId, userId, userName, child.productId, child.name, child.quantity * item.quantity, invoiceNumber, childId);
           for (const [additionId, qty] of Object.entries(child.additions)) {
             if (qty <= 0) continue;
             const addition = allAdditions.find((a) => a.id === additionId);
@@ -312,7 +354,7 @@ class SaleService {
         });
         await this.insertAdditionsAndSauces(database, saleItemId, item.additions, item.sauces, allAdditions, allSauces, item.quantity);
         // Descuento de stock (solo productos, no hijos de combo)
-        await deductProductStock(database, tenantId, userId, userName, item.productId, item.name, item.quantity, invoiceNumber);
+        await deductProductStock(database, tenantId, userId, userName, item.productId, item.name, item.quantity, invoiceNumber, saleItemId, item.skippedSupplies ?? []);
         // Descuento de stock de adiciones
         for (const [additionId, qty] of Object.entries(item.additions)) {
           if (qty <= 0) continue;

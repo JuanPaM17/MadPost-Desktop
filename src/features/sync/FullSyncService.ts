@@ -19,7 +19,7 @@ export const FULL_SYNC_TABLES = [
   ["additions", columns(["id", "tenant_id", "name", "price", "active::bool", "created_at", "updated_at", "stock", "quantity_per_sale"])],
   ["sauces", columns(["id", "tenant_id", "name", "active::bool", "created_at", "updated_at"])],
   ["supplies", columns(["id", "tenant_id", "name", "unit", "stock", "low_stock_threshold", "created_at", "updated_at"])],
-  ["product_supplies", columns(["product_id", "supply_id", "quantity_per_sale"])],
+  ["product_supplies", columns(["product_id", "supply_id", "quantity_per_sale", "deduct_mode"])],
   ["combos", columns(["id", "tenant_id", "name", "price", "image_path", "active::bool", "created_at", "updated_at"])],
   ["combo_items", columns(["id", "combo_id", "product_id", "quantity"])],
   ["cash_sessions", columns(["id", "tenant_id", "user_id", "session_number", "opening_amount", "closing_amount", "expected_amount", "status", "opened_at", "closed_at"])],
@@ -28,7 +28,8 @@ export const FULL_SYNC_TABLES = [
   ["sale_items", columns(["id", "sale_id", "product_id", "product_name", "quantity", "unit_price", "subtotal", "notes", "selected_option", "combo_id", "combo_sale_item_id", "original_unit_price", "category_name"])],
   ["sale_item_additions", columns(["id", "sale_item_id", "addition_id", "addition_name", "price", "quantity"])],
   ["sale_item_sauces", columns(["id", "sale_item_id", "sauce_id", "sauce_name"])],
-  ["stock_logs", columns(["id", "tenant_id", "user_id", "user_name", "item_type", "item_id", "item_name", "delta", "stock_before", "stock_after", "created_at"])],
+  ["sale_item_supplies", columns(["id", "tenant_id", "sale_item_id", "supply_id", "supply_name", "deducted::bool", "quantity_deducted", "skipped_reason", "created_at"])],
+  ["stock_logs", columns(["id", "tenant_id", "user_id", "user_name", "item_type", "item_id", "item_name", "delta", "stock_before", "stock_after", "created_at", "reason"])],
 ] as const satisfies readonly (readonly [string, readonly ColumnSpec[]])[];
 
 export type TableSyncProgress = { tableName: string; totalRecords: number; status: "SYNCING" | "DONE" | "ERROR" | "CANCELLED"; error: string | null; logLines: string[] };

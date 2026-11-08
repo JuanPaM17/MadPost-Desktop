@@ -2,7 +2,7 @@ import { Badge, Box, Button, Flex, Heading, Input, Separator, Spinner, Stack, Te
 import { HelpButton } from "../../components/ui/HelpButton";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Flame, LayoutGrid, LayoutTemplate, LockKeyhole, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, Printer, Settings2, Trash2, X } from "lucide-react";
-import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, type CatalogConfirmResult } from "../pos/ProductCatalog";
+import { AdditionsModal, OptionModal, ProductCatalogPanel, SaucesModal, SupplyAskModal, type AskSupply, type CatalogConfirmResult } from "../pos/ProductCatalog";
 import { posService, type PosAddition, type PosSauce } from "../pos/PosService";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sessionContext } from "../../core/session/SessionContext";
@@ -1824,6 +1824,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
           comboParentItemId: null,
           additions: additionList,
           sauces: sauceList,
+          skippedSupplies: cartItem.skippedSupplies,
         });
       }
     }
@@ -2861,6 +2862,7 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
           sauces: resolveSauces(item.sauces),
           productId: item.product_id ?? item.id,
           categoryName: null,
+          skippedSupplies: (() => { try { return item.skipped_supplies ? (JSON.parse(item.skipped_supplies) as string[]) : []; } catch { return []; } })(),
           children: children.map((child) => ({
             productId: child.product_id ?? child.id,
             name: child.product_name,
@@ -3410,6 +3412,14 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
   const [showAdditionsIcon, setShowAdditionsIcon] = useState(false);
   const [showSaucesIcon, setShowSaucesIcon] = useState(false);
 
+  // Insumos opcionales (ask mode)
+  const [askSupplies, setAskSupplies] = useState<AskSupply[]>([]);
+  const [localSkipped, setLocalSkipped] = useState<string[]>(() => {
+    try { return item.skipped_supplies ? (JSON.parse(item.skipped_supplies) as string[]) : []; }
+    catch { return []; }
+  });
+  const [supplyEditOpen, setSupplyEditOpen] = useState(false);
+
   useEffect(() => {
     if (!item.product_id || children.length > 0) return;
     posService.products(null).then((prods) => {
@@ -3419,6 +3429,11 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
       setShowAdditionsIcon(prod.showAdditions);
       setShowSaucesIcon(prod.showSauces);
     });
+    posService.askSupplies(item.product_id).then((asks) => {
+      if (asks.length > 0) {
+        setAskSupplies(asks.map((a) => ({ supplyId: a.supplyId, name: a.name, skip: localSkipped.includes(a.supplyId) })));
+      }
+    }).catch(() => {});
   }, [item.product_id]);
 
   async function openModal(mode: EditMode) {
@@ -3464,6 +3479,14 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
     setLocalOption(option);
     setEditMode(null);
     onItemsChange?.();
+  }
+
+  async function confirmSupplies(updated: AskSupply[]) {
+    const skipped = updated.filter((s) => s.skip).map((s) => s.supplyId);
+    await Promise.all(group.map((gi) => tableOrderService.updateSkippedSupplies(gi.id, skipped)));
+    setAskSupplies(updated);
+    setLocalSkipped(skipped);
+    setSupplyEditOpen(false);
   }
 
   async function increment() {
@@ -3517,6 +3540,13 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
             </Button>
           </Tip>
         )}
+        {children.length === 0 && askSupplies.length > 0 && (
+          <Tip text={localSkipped.length > 0 ? "Insumos: hay omisiones" : "Insumos opcionales"}>
+            <Button size="xs" variant="ghost" colorPalette={localSkipped.length > 0 ? "orange" : "gray"} px="1" onClick={() => setSupplyEditOpen(true)}>
+              <Pencil size={13} />
+            </Button>
+          </Tip>
+        )}
         <Box w="1px" h="14px" bg="gray.200" mx="0.5" flexShrink="0" />
         <Tip text="Agregar 1 unidad">
           <Button size="xs" variant="ghost" colorPalette="green" onClick={() => void increment()} px="1">
@@ -3543,6 +3573,9 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
       ))}
       {children.length === 0 && localSauces.length > 0 && (
         <Text fontSize="xs" color="orange.600" pl="2">Salsas: {localSauces.map((s) => s.name).join(", ")}</Text>
+      )}
+      {children.length === 0 && localSkipped.length > 0 && (
+        <Text fontSize="xs" color="orange.700" pl="2">Sin: {askSupplies.filter((s) => localSkipped.includes(s.supplyId)).map((s) => s.name).join(", ")}</Text>
       )}
 
       {/* Hijos de combo */}
@@ -3581,6 +3614,14 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
           selected={localOption}
           onClose={() => setEditMode(null)}
           onConfirm={(opt) => void confirmOption(opt)}
+        />
+      )}
+      {supplyEditOpen && (
+        <SupplyAskModal
+          name={item.product_name}
+          supplies={askSupplies.map((s) => ({ ...s, skip: localSkipped.includes(s.supplyId) }))}
+          onClose={() => setSupplyEditOpen(false)}
+          onConfirm={(updated) => void confirmSupplies(updated)}
         />
       )}
     </Box>

@@ -1,5 +1,5 @@
 import { Badge, Box, Button, Flex, Grid, Input, Spinner, Text } from "@chakra-ui/react";
-import { Flame, Minus, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
+import { Flame, Minus, Pencil, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tip } from "../../components/ui/Tip";
 import { businessConfigService } from "../config/BusinessConfigService";
@@ -21,6 +21,7 @@ export type CartChild = {
   sauces: string[];                    // sauceId[]
   options: string[];
   selectedOption: string | null;
+  skippedSupplies: string[];           // supplyId[] desactivados por el cajero
 };
 export type CartItem = {
   key: string;
@@ -37,6 +38,8 @@ export type CartItem = {
   selectedOption: string | null;
   categoryName: string | null;
   children: CartChild[];
+  skippedSupplies: string[];           // supplyId[] desactivados por el cajero
+  askSupplies: AskSupply[];            // lista completa de insumos ask para editar desde MiniCart
 };
 
 // Resultado que emite ProductCatalogPanel al confirmar
@@ -353,6 +356,58 @@ function ConfirmDialog({ message, onCancel, onConfirm }: { message: string; onCa
 }
 
 // ---------------------------------------------------------------------------
+// SupplyAskModal — insumos opcionales
+// ---------------------------------------------------------------------------
+export function SupplyAskModal({ name, supplies, onClose, onConfirm }: {
+  name: string;
+  supplies: AskSupply[];
+  onClose: () => void;
+  onConfirm: (supplies: AskSupply[]) => void;
+}) {
+  const [state, setState] = useState<AskSupply[]>(supplies);
+  function toggle(supplyId: string) {
+    setState((prev) => prev.map((s) => s.supplyId === supplyId ? { ...s, skip: !s.skip } : s));
+  }
+  return (
+    <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
+      <Box w="full" maxW="400px" bg="white" p="6" boxShadow="2xl" borderRadius="md">
+        <Flex justify="space-between" align="center" mb="1">
+          <Text fontWeight="bold" fontSize="lg">Insumos opcionales</Text>
+          <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
+        </Flex>
+        <Text color="gray.500" fontSize="sm" mb="4">{name}</Text>
+        <Flex direction="column" gap="2">
+          {state.map((s) => (
+            <Flex
+              key={s.supplyId}
+              align="center"
+              justify="space-between"
+              borderWidth="2px"
+              borderColor={s.skip ? "gray.200" : "purple.300"}
+              bg={s.skip ? "gray.50" : "purple.50"}
+              borderRadius="md"
+              px="3"
+              py="2"
+              cursor="pointer"
+              onClick={() => toggle(s.supplyId)}
+            >
+              <Text fontSize="sm" color={s.skip ? "gray.400" : "gray.800"} textDecoration={s.skip ? "line-through" : undefined}>{s.name}</Text>
+              <Box w="18px" h="18px" borderRadius="sm" borderWidth="2px" borderColor={s.skip ? "gray.300" : "purple.500"} bg={s.skip ? "white" : "purple.500"} flexShrink="0">
+                {!s.skip && <Text color="white" fontSize="xs" textAlign="center" lineHeight="14px">✓</Text>}
+              </Box>
+            </Flex>
+          ))}
+        </Flex>
+        <Flex mt="6" justify="end" gap="2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button colorPalette="purple" onClick={() => onConfirm(state)}>Listo</Button>
+        </Flex>
+      </Box>
+    </Flex>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ComboAdditionsModal — adiciones de varios hijos agrupadas
 // ---------------------------------------------------------------------------
 function ComboAdditionsModal({ comboChildren, additions, additionsByChild, onClose, onChange, onConfirm, confirmLabel }: {
@@ -399,7 +454,7 @@ function ComboAdditionsModal({ comboChildren, additions, additionsByChild, onClo
 // ---------------------------------------------------------------------------
 // MiniCart — carrito temporal derecho
 // ---------------------------------------------------------------------------
-function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions, onEditSauces, onEditOption, onConfirm, onCancel }: {
+function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions, onEditSauces, onEditOption, onEditSupplies, onConfirm, onCancel }: {
   items: CartItem[];
   additions: PosAddition[];
   sauces: PosSauce[];
@@ -408,6 +463,7 @@ function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions
   onEditAdditions: (key: string, childId?: string) => void;
   onEditSauces: (key: string, childId?: string) => void;
   onEditOption: (key: string, childId?: string) => void;
+  onEditSupplies: (key: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -431,6 +487,11 @@ function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions
                     {item.kind === "combo" ? <Badge size="xs" colorPalette="blue" variant="subtle" mt="0.5">Combo</Badge> : null}
                   </Box>
                   <Flex gap="1" flexShrink="0">
+                    {item.askSupplies.length > 0
+                      ? <Tip text={item.skippedSupplies.length > 0 ? "Insumos: hay omisiones" : "Insumos opcionales"}>
+                          <Button size="xs" variant="ghost" colorPalette={item.skippedSupplies.length > 0 ? "orange" : "gray"} px="1" onClick={() => onEditSupplies(item.key)}><Pencil size={13} /></Button>
+                        </Tip>
+                      : null}
                     <Button size="xs" variant="ghost" colorPalette="purple" onClick={() => onClone(item.key)}><Plus size={13} /></Button>
                     <Button size="xs" variant="ghost" colorPalette="red" onClick={() => onRemove(item.key)}><Trash2 size={13} /></Button>
                   </Flex>
@@ -449,6 +510,9 @@ function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions
                   ? <Button size="xs" variant="ghost" colorPalette="green" onClick={() => onEditSauces(item.key)}>
                     {item.sauces.length > 0 ? sauces.filter((s) => item.sauces.includes(s.id)).map((s) => s.name).join(", ") : "+ Salsas"}
                   </Button>
+                  : null}
+                {item.askSupplies.length > 0 && item.skippedSupplies.length > 0
+                  ? <Text fontSize="xs" color="orange.700" pl="1">Sin: {item.askSupplies.filter((s) => item.skippedSupplies.includes(s.supplyId)).map((s) => s.name).join(", ")}</Text>
                   : null}
                 {item.children.map((child) => (
                   <Box key={child.productId} pl="2" mt="1" borderLeftWidth="2px" borderColor="gray.300">
@@ -493,13 +557,15 @@ function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions
 // ---------------------------------------------------------------------------
 // Tipo para los pasos pendientes del flujo de un item
 // ---------------------------------------------------------------------------
+export type AskSupply = { supplyId: string; name: string; skip: boolean };
 type PendingStep =
   | { type: "stockConfirm"; item: PosGridItem }
   | { type: "option"; item: PosGridItem; childId?: string; options: string[] }
   | { type: "additions"; item: PosGridItem }
   | { type: "comboAdditions"; item: PosGridItem & { kind: "combo" }; additionsByChild: Map<string, Record<string, number>> }
   | { type: "sauces"; item: PosGridItem; childId?: string }
-  | { type: "comboSauces"; item: PosGridItem & { kind: "combo" }; childIdx: number };
+  | { type: "comboSauces"; item: PosGridItem & { kind: "combo" }; childIdx: number }
+  | { type: "supplyAsk"; item: PosGridItem; supplies: AskSupply[] };
 
 // ---------------------------------------------------------------------------
 // ProductCatalogPanel
@@ -530,6 +596,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   const pendingCartItem = useRef<CartItem | null>(null);
   // Para edicion desde mini-carrito
   const [editTarget, setEditTarget] = useState<{ key: string; childId?: string; mode: "additions" | "sauces" | "option" } | null>(null);
+  const [editSuppliesKey, setEditSuppliesKey] = useState<string | null>(null);
 
   const loadItems = useCallback(async (selection: SelectedCategory) => {
     setLoading(true);
@@ -601,6 +668,8 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         selectedOption: item.options.length > 0 ? item.options[0] : null,
         categoryName: item.categoryName,
         children: [],
+        skippedSupplies: [],
+        askSupplies: [],
       };
       pendingCartItem.current = ci;
       if (item.options.length > 0) {
@@ -610,7 +679,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
       } else if (item.showSauces && sauces.length > 0) {
         setPending({ type: "sauces", item });
       } else {
-        commitItem(ci, item);
+        void checkSupplyAskThenCommit(ci, item);
       }
     } else {
       // combo
@@ -624,6 +693,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         sauces: [],
         options: child.options,
         selectedOption: child.options.length > 0 ? child.options[0] : null,
+        skippedSupplies: [],
       }));
       const ci: CartItem = {
         key: `combo:${item.id}:${Date.now()}`,
@@ -640,6 +710,8 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         selectedOption: null,
         categoryName: null,
         children,
+        skippedSupplies: [],
+        askSupplies: [],
       };
       pendingCartItem.current = ci;
       // Paso 1 de combo: opciones del primer hijo que las tenga
@@ -683,6 +755,29 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     } else {
       commitItem(pendingCartItem.current!, item);
     }
+  }
+
+  async function checkSupplyAskThenCommit(ci: CartItem, item: PosGridItem) {
+    if (item.kind !== "product") { commitItem(ci, item); return; }
+    try {
+      const asks = await posService.askSupplies(item.id);
+      if (asks.length > 0) {
+        const supplies: AskSupply[] = asks.map((s) => ({ supplyId: s.supplyId, name: s.name, skip: false }));
+        pendingCartItem.current = { ...ci, askSupplies: supplies };
+        setPending({ type: "supplyAsk", item, supplies });
+      } else {
+        commitItem(ci, item);
+      }
+    } catch {
+      commitItem(ci, item);
+    }
+  }
+
+  function handleSupplyAskDone(supplies: AskSupply[]) {
+    if (!pendingCartItem.current || !pending || pending.type !== "supplyAsk") return;
+    const skipped = supplies.filter((s) => s.skip).map((s) => s.supplyId);
+    pendingCartItem.current = { ...pendingCartItem.current, skippedSupplies: skipped, askSupplies: supplies };
+    commitItem(pendingCartItem.current, pending.item);
   }
 
   function commitItem(ci: CartItem, item: PosGridItem) {
@@ -746,7 +841,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
       } else if (p.item.kind === "product" && p.item.showSauces && sauces.length > 0) {
         setPending({ type: "sauces", item: p.item });
       } else {
-        commitItem(pendingCartItem.current, p.item);
+        void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
       }
     }
   }
@@ -757,7 +852,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     if (p.item.kind === "product" && p.item.showSauces && sauces.length > 0) {
       setPending({ type: "sauces", item: p.item });
     } else {
-      commitItem(pendingCartItem.current, p.item);
+      void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
     }
   }
 
@@ -770,7 +865,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   function handleSaucesDone() {
     if (!pendingCartItem.current || !pending) return;
     const p = pending as { type: "sauces"; item: PosGridItem };
-    commitItem(pendingCartItem.current, p.item);
+    void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
   }
 
   function handleComboSaucesDone() {
@@ -786,6 +881,17 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   }
 
   // ---------- edicion desde mini-carrito ----------
+
+  function handleEditSupplies(key: string) {
+    setEditSuppliesKey(key);
+  }
+
+  function applyEditSupplies(supplies: AskSupply[]) {
+    if (!editSuppliesKey) return;
+    const skipped = supplies.filter((s) => s.skip).map((s) => s.supplyId);
+    setCart((prev) => prev.map((item) => item.key !== editSuppliesKey ? item : { ...item, skippedSupplies: skipped, askSupplies: supplies }));
+    setEditSuppliesKey(null);
+  }
 
   function handleEditAdditions(key: string, childId?: string) {
     setEditTarget({ key, childId, mode: "additions" });
@@ -868,6 +974,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         onEditAdditions={handleEditAdditions}
         onEditSauces={handleEditSauces}
         onEditOption={handleEditOption}
+        onEditSupplies={handleEditSupplies}
         onConfirm={() => onConfirm({ items: cart, additions, sauces, maxSauces })}
         onCancel={onCancel}
       />
@@ -981,7 +1088,27 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         );
       })() : null}
 
+      {pending?.type === "supplyAsk" ? (
+        <SupplyAskModal
+          name={pending.item.name}
+          supplies={pending.supplies}
+          onClose={cancelFlow}
+          onConfirm={handleSupplyAskDone}
+        />
+      ) : null}
+
       {/* Edicion desde mini-carrito */}
+      {(() => {
+        const editSuppliesItem = editSuppliesKey ? cart.find((i) => i.key === editSuppliesKey) : null;
+        return editSuppliesItem ? (
+          <SupplyAskModal
+            name={editSuppliesItem.name}
+            supplies={editSuppliesItem.askSupplies}
+            onClose={() => setEditSuppliesKey(null)}
+            onConfirm={applyEditSupplies}
+          />
+        ) : null;
+      })()}
       {editTarget?.mode === "additions" && editItem ? (
         <AdditionsModal
           name={editName}
