@@ -337,6 +337,14 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost Desktop_X
 
 ## Historial de versiones
 
+### v1.9.0-beta.1 (Pre-release)
+
+**Corregido:**
+- Los vendedores ahora ven todas las cajas registradoras y todo el historial de ventas, sin importar quien abrio la caja.
+- El resumen de consumo en el historial de inventario muestra solo el nombre del insumo, sin el nombre del producto entre parentesis.
+
+---
+
 ### v1.8.0 — Copias de seguridad automaticas mientras trabajas
 
 **Corregido:**
