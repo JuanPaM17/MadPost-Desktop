@@ -61,6 +61,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Ejecuta un comando nativo y retorna su exit code sin que Stop lance excepcion.
+function Invoke-Native {
+    $ErrorActionPreference = "Continue"
+    & $args[0] $args[1..($args.Length-1)] 2>&1
+    $ec = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    return $ec
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -180,8 +189,11 @@ if (-not $Repo) {
 Write-Ok "Repo: $Repo"
 
 # Auth gh
+$ErrorActionPreference = "Continue"
 $authCheck = gh auth status 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Fail "GitHub CLI no autenticado. Ejecuta: gh auth login" }
+$authEc = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($authEc -ne 0) { Write-Fail "GitHub CLI no autenticado. Ejecuta: gh auth login" }
 Write-Ok "gh autenticado"
 
 # Visibilidad del repo
@@ -252,13 +264,15 @@ Write-Ok "Versiones sincronizadas: Cargo=$cargoVersion, tauri.conf=$tauriVersion
 # ---------------------------------------------------------------------------
 Write-Step "Verificando tag v$Version"
 
+$ErrorActionPreference = "Continue"
 $tagExists = git tag -l "v$Version"
-if ($tagExists) {
-    $releaseExists = gh release view "v$Version" --repo $Repo 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Fail "El release v$Version ya existe en GitHub. Para reintento de manifiesto usa -SkipBuild y omite la creacion del release manualmente."
-    }
+$null = gh release view "v$Version" --repo $Repo 2>&1
+$releaseAlreadyExists = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = "Stop"
+if ($releaseAlreadyExists) {
+    Write-Fail "El release v$Version ya existe en GitHub. Para reintento de manifiesto usa -SkipBuild."
 }
+Write-Ok "Tag verificado"
 
 # ---------------------------------------------------------------------------
 # 5. BUILD O VERIFICACION DE ARTEFACTO EXISTENTE
@@ -283,8 +297,11 @@ if (-not $SkipBuild) {
     } else {
         Push-Location $projectRoot
         try {
+            $ErrorActionPreference = "Continue"
             npm run tauri build
-            if ($LASTEXITCODE -ne 0) { Write-Fail "npm run tauri build fallo con codigo $LASTEXITCODE." }
+            $buildEc = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($buildEc -ne 0) { Write-Fail "npm run tauri build fallo con codigo $buildEc." }
         } finally {
             Pop-Location
         }
@@ -363,8 +380,11 @@ $releaseArgs = @(
 )
 if ($Channel -eq "beta") { $releaseArgs += "--prerelease" }
 
+$ErrorActionPreference = "Continue"
 gh @releaseArgs
-if ($LASTEXITCODE -ne 0) { Write-Fail "gh release create fallo. El release NO se creo." }
+$createEc = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($createEc -ne 0) { Write-Fail "gh release create fallo. El release NO se creo." }
 Write-Ok "Release v$Version creado"
 
 # Subir .exe (renombrado con punto para consistencia con releases anteriores)
@@ -374,8 +394,11 @@ $tempSig = Join-Path ([System.IO.Path]::GetTempPath()) $githubSigName
 Copy-Item $exePath $tempExe -Force
 Copy-Item $sigPath $tempSig -Force
 
+$ErrorActionPreference = "Continue"
 gh release upload "v$Version" $tempExe $tempSig --repo $Repo
-if ($LASTEXITCODE -ne 0) { Write-Fail "gh release upload fallo. El release existe pero sin assets. Reintenta con -SkipBuild." }
+$uploadEc = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($uploadEc -ne 0) { Write-Fail "gh release upload fallo. El release existe pero sin assets. Reintenta con -SkipBuild." }
 Write-Ok "Assets subidos: $githubAssetName + $githubSigName"
 
 # Limpiar temporales
@@ -417,8 +440,11 @@ Write-Step "Subiendo $manifestFileName como asset del release"
 $tempManifest = Join-Path ([System.IO.Path]::GetTempPath()) $manifestFileName
 $manifestJson | Out-File -FilePath $tempManifest -Encoding UTF8 -NoNewline
 
+$ErrorActionPreference = "Continue"
 gh release upload "v$Version" $tempManifest --repo $Repo
-if ($LASTEXITCODE -ne 0) {
+$manifestUploadEc = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($manifestUploadEc -ne 0) {
     Write-Warn "No se pudo subir $manifestFileName como asset. El release existe pero el manifiesto NO esta publicado."
     Write-Warn "Reintenta con: gh release upload v$Version '$tempManifest' --repo $Repo"
     exit 1
@@ -448,8 +474,11 @@ try {
     if (-not $branchExistsRemote) {
         Write-Warn "Rama releases-manifest no existe en remoto. Creando rama huerfana..."
         # Crear worktree con rama huerfana nueva
+        $ErrorActionPreference = "Continue"
         git worktree add --orphan -b releases-manifest $worktreeDir
-        if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el worktree huerfano." }
+        $wtEc = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if ($wtEc -ne 0) { throw "No se pudo crear el worktree huerfano." }
 
         Push-Location $worktreeDir
         # Inicializar con README para que la rama no este vacia
@@ -470,10 +499,15 @@ No modificar manualmente. Actualizado por `scripts/publish-release.ps1`.
     } else {
         # La rama existe: hacer checkout via worktree
         git fetch origin releases-manifest
+        $ErrorActionPreference = "Continue"
         git worktree add $worktreeDir releases-manifest
-        if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el worktree de releases-manifest." }
+        $wtEc2 = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if ($wtEc2 -ne 0) { throw "No se pudo crear el worktree de releases-manifest." }
         Push-Location $worktreeDir
+        $ErrorActionPreference = "Continue"
         git pull origin releases-manifest --ff-only
+        $ErrorActionPreference = "Stop"
     }
 
     # Leer manifiesto del otro canal para no sobreescribirlo
@@ -497,8 +531,11 @@ No modificar manualmente. Actualizado por `scripts/publish-release.ps1`.
     $manifestJson | Out-File $manifestFileName -Encoding UTF8 -NoNewline
     git add $manifestFileName
     git commit -m "release($Channel): v$Version"
+    $ErrorActionPreference = "Continue"
     git push origin releases-manifest
-    if ($LASTEXITCODE -ne 0) { throw "git push fallo." }
+    $pushEc = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($pushEc -ne 0) { throw "git push fallo." }
     Write-Ok "Rama releases-manifest actualizada con $manifestFileName"
 
 } catch {
