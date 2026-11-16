@@ -7,6 +7,13 @@ export type UpdateInfo = { version: string; releaseUrl: string; downloadUrl: str
 export type ReleaseEntry = { version: string; date: string; notes: string };
 export type UpdateCheckResult = { state: "upToDate" | "available" | "unavailable"; message: string; update: UpdateInfo | null };
 
+// Flag de migracion leido desde el .env del proyecto (variable USE_TAURI_UPDATER).
+// false = mecanismo legacy (CMD/BAT), true = tauri-plugin-updater.
+// Para activar: agregar USE_TAURI_UPDATER=true en el .env y recompilar.
+// No distribuir a clientes con true hasta completar validacion de extremo a extremo.
+declare const __USE_TAURI_UPDATER__: boolean;
+export const USE_TAURI_UPDATER: boolean = __USE_TAURI_UPDATER__;
+
 class UpdateService {
   async checkForUpdate(): Promise<UpdateInfo | null> { return (await this.check()).update; }
 

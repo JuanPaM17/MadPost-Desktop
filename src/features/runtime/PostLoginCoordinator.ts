@@ -15,6 +15,7 @@ import { rolesService } from "../roles/RolesService";
 export type RuntimeContext = {
   tenantId: string;
   tenantName: string;
+  tenantAddress?: string;
   syncEnabled: boolean;
   isDemo?: boolean;
 };
@@ -26,7 +27,7 @@ interface RuntimeService {
 
 class MadPostApiServer implements RuntimeService {
   async start(context: RuntimeContext) {
-    const result = await invoke<NativeRuntimeResult>("start_mobile_api", { tenantId: context.tenantId, tenantName: context.tenantName });
+    const result = await invoke<NativeRuntimeResult>("start_mobile_api", { tenantId: context.tenantId, tenantName: context.tenantName, tenantAddress: context.tenantAddress ?? "" });
     runtimeLogger.info("MadPostApiServer", result.message, { active: result.active, tenantId: context.tenantId });
   }
   async stop() { const result = await invoke<NativeRuntimeResult>("stop_mobile_api"); runtimeLogger.info("MadPostApiServer", result.message, { active: result.active }); }
@@ -34,7 +35,7 @@ class MadPostApiServer implements RuntimeService {
 
 class MdnsPublisher implements RuntimeService {
   async start(context: RuntimeContext) {
-    const result = await invoke<NativeRuntimeResult>("publish_mdns", { tenantId: context.tenantId, tenantName: context.tenantName });
+    const result = await invoke<NativeRuntimeResult>("publish_mdns", { tenantId: context.tenantId, tenantName: context.tenantName, tenantAddress: context.tenantAddress ?? "" });
     runtimeLogger.info("MdnsPublisher", result.message, { active: result.active, tenantName: context.tenantName });
   }
   async stop() { const result = await invoke<NativeRuntimeResult>("unpublish_mdns"); runtimeLogger.info("MdnsPublisher", result.message, { active: result.active }); }
@@ -72,7 +73,7 @@ class PostLoginCoordinator {
 
     // En modo demo no se arrancan servicios de fondo: sync, backup, comandos remotos ni API movil
     if (!context.isDemo) {
-      const mobileEnabled = import.meta.env.DEV && await mobileDevicesService.loadAutoStart().catch(() => false);
+      const mobileEnabled = await mobileDevicesService.loadAutoStart().catch(() => false);
       for (const service of this.services) {
         if (!mobileEnabled && (service instanceof MadPostApiServer || service instanceof MdnsPublisher)) {
           runtimeLogger.info("PostLoginCoordinator", "Servidor local omitido por configuracion.", {});

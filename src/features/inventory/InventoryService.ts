@@ -40,6 +40,6 @@ function mapStockLog(row: StockLogRow): StockLog { return { id: row.id, tenantId
 function tableForItem(itemType: InventoryItemType) { return itemType === "SUPPLY" ? "supplies" : itemType === "PRODUCT" ? "products" : "additions"; }
 function bogotaStart(date: string) { const [year, month, day] = date.split("-").map(Number); return new Date(Date.UTC(year, month - 1, day, 5)).toISOString(); }
 function nextDate(date: string) { const [year, month, day] = date.split("-").map(Number); const next = new Date(Date.UTC(year, month - 1, day + 1)); return next.toISOString().slice(0, 10); }
-function cleanItemName(value: string) { return value.replace(/\s*\((Producto|Insumo|Adicion)\)\s*\[Factura[^\]]*\]/gi, "").replace(/\s*\[Factura[^\]]*\]/gi, "").trim(); }
+function cleanItemName(value: string) { return value.replace(/\s*\((Producto|Insumo|Adicion)\)\s*\[Factura[^\]]*\]/gi, "").replace(/\s*\[Factura[^\]]*\]/gi, "").replace(/\s*\([^)]*\)\s*$/, "").trim(); }
 export const inventoryService = new InventoryService();
 export function inventoryTypeLabel(type: string) { return type === "SUPPLY" ? "Insumo" : type === "PRODUCT" ? "Producto" : type === "ADDITION" ? "Adicion" : type; }

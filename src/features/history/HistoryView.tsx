@@ -87,7 +87,6 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
     conditions.push("s.cash_session_id=$" + (params.push(filters.sessionId)));
   } else {
     conditions.push("s.tenant_id=$" + (params.push(tenantId)));
-    if (!isAdmin) conditions.push("s.user_id=$" + (params.push(userId)));
   }
 
   if (filters.dateFrom) conditions.push("s.created_at >= $" + (params.push(filters.dateFrom + "T00:00:00.000Z")));
@@ -121,8 +120,8 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
 
 async function loadCashOptions(tenantId: string, userId: string, isAdmin: boolean): Promise<CashOption[]> {
   const database = await databaseManager.database();
-  const where = isAdmin ? "WHERE tenant_id=$1" : "WHERE tenant_id=$1 AND user_id=$2";
-  const params = isAdmin ? [tenantId] : [tenantId, userId];
+  const where = "WHERE tenant_id=$1";
+  const params = [tenantId];
   const rows = await database.select<{ id: string; session_number: number; opened_at: string }[]>(
     `SELECT id, session_number, opened_at FROM cash_sessions ${where} ORDER BY opened_at DESC`,
     params,

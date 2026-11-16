@@ -24,6 +24,13 @@
         { "path": "$APPDATA/**" }
       ]
     },
-    "dialog:default"
+    "dialog:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "updater:allow-download-and-install",
+    "process:default",
+    "process:allow-restart"
   ]
 }

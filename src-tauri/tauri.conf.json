@@ -32,6 +32,23 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI2Q0VGNEI1NEZGQTgyM0QKUldROWd2cFB0ZlRPSnNlbXBTR21NOHo5djRwNWwyYjlVUGJBM2NmN0lGU2EvaCtkYWNHOWt5VWMK",
+      "endpoints": [
+        "https://raw.githubusercontent.com/JuanPaM17/MadPost-Desktop/releases-manifest/stable-latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppTabs } from "../../components/ui/AppTabs";
 import { notify } from "../../components/ui/AppToaster";
 import { Tip } from "../../components/ui/Tip";
+import { businessConfigService } from "../config/BusinessConfigService";
 import { mobileDevicesService, type DeviceAlias, type MobileApiStatus } from "./MobileDevicesService";
 
 type DeviceRow = { ip: string; alias: string; connected: boolean; connectedAt: string | null };
@@ -16,6 +17,8 @@ function ConnectionTab() {
   const [autoStart, setAutoStart] = useState(false);
   const [copied, setCopied] = useState(false);
   const [serverBusy, setServerBusy] = useState(false);
+  const [tenantName, setTenantName] = useState("");
+  const [tenantAddress, setTenantAddress] = useState("");
 
   const refresh = useCallback(async () => {
     try { setStatus(await mobileDevicesService.status()); } catch { notify.error("No fue posible consultar el servidor local."); }
@@ -24,12 +27,13 @@ function ConnectionTab() {
   useEffect(() => {
     void refresh();
     void mobileDevicesService.loadAutoStart().then(setAutoStart).catch(() => {});
+    void businessConfigService.load().then((c) => { setTenantName(c.name); setTenantAddress(c.address); }).catch(() => {});
     const timer = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
   const address = status?.active && status.local_ip ? `${status.local_ip}:${status.port}` : null;
-  const qrValue = status?.local_ip ? `madpost://connect?host=${status.local_ip}&port=${status.port}` : "";
+  const qrValue = status?.local_ip ? `madpost://connect?host=${status.local_ip}&port=${status.port}&name=${encodeURIComponent(tenantName)}&address=${encodeURIComponent(tenantAddress)}` : "";
 
   async function copyAddress() {
     if (!status?.local_ip) return;

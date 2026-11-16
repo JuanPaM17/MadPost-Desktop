@@ -63,9 +63,9 @@ function normalize(str: string) {
   return str.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase();
 }
 
-export function filterItems<T extends { name: string; description?: string | null }>(items: T[], search: string) {
+export function filterItems<T extends { name: string; description?: string | null; options?: string[] }>(items: T[], search: string) {
   const query = normalize(search.trim());
-  return items.filter((item) => !query || normalize(item.name).includes(query) || normalize(item.description ?? "").includes(query));
+  return items.filter((item) => !query || normalize(item.name).includes(query) || normalize(item.description ?? "").includes(query) || (item.options ?? []).some((o) => normalize(o).includes(query)));
 }
 
 export function money(value: number) {
@@ -408,44 +408,78 @@ export function SupplyAskModal({ name, supplies, onClose, onConfirm }: {
 }
 
 // ---------------------------------------------------------------------------
-// ComboAdditionsModal — adiciones de varios hijos agrupadas
+// ComboChildStepModal — salsas + adiciones de un hijo del combo en una sola modal
 // ---------------------------------------------------------------------------
-function ComboAdditionsModal({ comboChildren, additions, additionsByChild, onClose, onChange, onConfirm, confirmLabel }: {
-  comboChildren: PosComboItem[];
+function ComboChildStepModal({ comboName, child, additions, additionQty, sauces, maxSauces, selectedSauces, onClose, onChangeAddition, onToggleSauce, onConfirm, confirmLabel }: {
+  comboName: string;
+  child: { name: string; quantity: number; selectedOption: string | null; showAdditions: boolean; showSauces: boolean };
   additions: PosAddition[];
-  additionsByChild: Map<string, Record<string, number>>;
+  additionQty: Record<string, number>;
+  sauces: PosSauce[];
+  maxSauces: number;
+  selectedSauces: string[];
   onClose: () => void;
-  onChange: (productId: string, additionId: string, delta: number) => void;
+  onChangeAddition: (id: string, delta: number) => void;
+  onToggleSauce: (id: string) => void;
   onConfirm: () => void;
   confirmLabel: string;
 }) {
-  const childrenWithAdditions = comboChildren.filter((c) => c.showAdditions);
-  if (!childrenWithAdditions.length) { onConfirm(); return null; }
+  const [search, setSearch] = useState("");
+  const childLabel = `${comboName} — ${child.quantity > 1 ? `${child.quantity}x ` : ""}${child.name}${child.selectedOption ? ` [${child.selectedOption}]` : ""}`;
+  const filteredAdditions = search.trim()
+    ? additions.filter((a) => normalize(a.name).includes(normalize(search)))
+    : additions;
   return (
     <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
-      <Box w="full" maxW="560px" maxH="calc(100vh - 48px)" overflowY="auto" bg="white" p="6" boxShadow="2xl" borderRadius="md">
-        <Flex justify="space-between" align="center" mb="1">
-          <Text fontWeight="bold" fontSize="lg">Adiciones del combo</Text>
-          <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
-        </Flex>
-        {childrenWithAdditions.map((child) => {
-          const quantities = additionsByChild.get(child.productId) ?? {};
-          const label = child.quantity > 1 ? `${child.quantity}x ${child.name}${child.selectedOption ? ` [${child.selectedOption}]` : ""}` : `${child.name}${child.selectedOption ? ` [${child.selectedOption}]` : ""}`;
-          return (
-            <Box key={child.productId} mt="4">
-              <Text fontSize="sm" fontWeight="semibold" color="gray.600" mb="2">{label}:</Text>
-              <AdditionsGrid
-                additions={additions}
-                quantities={quantities}
-                onChange={(additionId, delta) => onChange(child.productId, additionId, delta)}
-              />
+      <Box w="full" maxW="560px" bg="white" boxShadow="2xl" borderRadius="md" display="flex" flexDirection="column" maxH="calc(100vh - 48px)">
+        <Box p="6" pb="3">
+          <Flex justify="space-between" align="center">
+            <Text fontWeight="bold" fontSize="lg">{child.name}</Text>
+            <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
+          </Flex>
+          <Text mt="1" color="gray.500" fontSize="sm">{childLabel}</Text>
+        </Box>
+
+        <Box overflowY="auto" px="6" flex="1">
+          {/* Salsas arriba */}
+          {child.showSauces && sauces.length > 0 && (
+            <Box mb="5">
+              <Flex align="center" gap="2" mb="2">
+                <Flame size={14} color={selectedSauces.length > 0 ? "#16a34a" : "#94a3b8"} />
+                <Text fontSize="sm" fontWeight="semibold" color="gray.700">Salsas</Text>
+                <Text fontSize="xs" color={selectedSauces.length >= maxSauces ? "green.600" : "gray.400"}>{selectedSauces.length} / {maxSauces} seleccionadas</Text>
+              </Flex>
+              <Flex gap="2" wrap="wrap">
+                {sauces.map((sauce) => {
+                  const active = selectedSauces.includes(sauce.id);
+                  const maxed = !active && selectedSauces.length >= maxSauces;
+                  return <Button key={sauce.id} size="sm" variant={active ? "solid" : "outline"} colorPalette="green" opacity={maxed ? 0.4 : 1} disabled={maxed} onClick={() => onToggleSauce(sauce.id)}>{sauce.name}</Button>;
+                })}
+              </Flex>
             </Box>
-          );
-        })}
-        <Flex mt="6" justify="end" gap="2">
-          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button colorPalette="purple" onClick={onConfirm}>{confirmLabel}</Button>
-        </Flex>
+          )}
+
+          {/* Adiciones abajo */}
+          {child.showAdditions && additions.length > 0 && (
+            <Box>
+              <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb="2">Adiciones</Text>
+              {additions.length > 6 && (
+                <Box mb="3" position="relative">
+                  <Search size={16} color="#64748b" style={{ position: "absolute", left: 11, top: 11, zIndex: 1 }} />
+                  <Input pl="9" size="sm" placeholder="Buscar adicion..." value={search} onChange={(e) => setSearch(e.target.value)} />
+                </Box>
+              )}
+              <AdditionsGrid additions={filteredAdditions} quantities={additionQty} onChange={onChangeAddition} />
+            </Box>
+          )}
+        </Box>
+
+        <Box p="6" pt="4">
+          <Flex justify="end" gap="2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button colorPalette="purple" onClick={onConfirm}>{confirmLabel}</Button>
+          </Flex>
+        </Box>
       </Box>
     </Flex>
   );
@@ -562,9 +596,8 @@ type PendingStep =
   | { type: "stockConfirm"; item: PosGridItem }
   | { type: "option"; item: PosGridItem; childId?: string; options: string[] }
   | { type: "additions"; item: PosGridItem }
-  | { type: "comboAdditions"; item: PosGridItem & { kind: "combo" }; additionsByChild: Map<string, Record<string, number>> }
   | { type: "sauces"; item: PosGridItem; childId?: string }
-  | { type: "comboSauces"; item: PosGridItem & { kind: "combo" }; childIdx: number }
+  | { type: "comboChildStep"; item: PosGridItem & { kind: "combo" }; childIdx: number; additionsByChild: Map<string, Record<string, number>> }
   | { type: "supplyAsk"; item: PosGridItem; supplies: AskSupply[] };
 
 // ---------------------------------------------------------------------------
@@ -726,34 +759,13 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
   }
 
   function continueComboAfterOptions(item: PosGridItem & { kind: "combo" }, ci: CartItem) {
-    // Adiciones agrupadas
-    const childrenWithAdditions = ci.children.filter((c) => c.showAdditions);
-    if (childrenWithAdditions.length > 0 && additions.length > 0) {
-      const addByChild = new Map<string, Record<string, number>>();
-      for (const c of childrenWithAdditions) addByChild.set(c.productId, {});
-      setPending({ type: "comboAdditions", item, additionsByChild: addByChild });
+    const addByChild = new Map<string, Record<string, number>>();
+    for (const c of ci.children) addByChild.set(c.productId, {});
+    const firstIdx = ci.children.findIndex((c) => (c.showAdditions && additions.length > 0) || (c.showSauces && sauces.length > 0));
+    if (firstIdx >= 0) {
+      setPending({ type: "comboChildStep", item, childIdx: firstIdx, additionsByChild: addByChild });
     } else {
-      continueComboAfterAdditions(item, ci, new Map());
-    }
-  }
-
-  function continueComboAfterAdditions(item: PosGridItem & { kind: "combo" }, ci: CartItem, addByChild: Map<string, Record<string, number>>) {
-    // Aplicar adiciones al ci
-    if (pendingCartItem.current) {
-      pendingCartItem.current = {
-        ...pendingCartItem.current,
-        children: pendingCartItem.current.children.map((c) => ({
-          ...c,
-          additions: addByChild.get(c.productId) ?? {},
-        })),
-      };
-    }
-    // Salsas: por cada hijo que las tenga
-    const firstWithSauces = ci.children.findIndex((c) => c.showSauces);
-    if (firstWithSauces >= 0 && sauces.length > 0) {
-      setPending({ type: "comboSauces", item, childIdx: firstWithSauces });
-    } else {
-      commitItem(pendingCartItem.current!, item);
+      commitItem(ci, item);
     }
   }
 
@@ -856,28 +868,23 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     }
   }
 
-  function handleComboAdditionsDone(addByChild: Map<string, Record<string, number>>) {
-    if (!pendingCartItem.current || !pending) return;
-    const p = pending as { type: "comboAdditions"; item: PosGridItem & { kind: "combo" } };
-    continueComboAfterAdditions(p.item, pendingCartItem.current, addByChild);
+  function handleComboChildStepDone() {
+    if (!pendingCartItem.current || !pending || pending.type !== "comboChildStep") return;
+    const p = pending;
+    const nextIdx = pendingCartItem.current.children.findIndex((c, i) =>
+      i > p.childIdx && ((c.showAdditions && additions.length > 0) || (c.showSauces && sauces.length > 0))
+    );
+    if (nextIdx >= 0) {
+      setPending({ ...p, childIdx: nextIdx });
+    } else {
+      commitItem(pendingCartItem.current, p.item);
+    }
   }
 
   function handleSaucesDone() {
     if (!pendingCartItem.current || !pending) return;
     const p = pending as { type: "sauces"; item: PosGridItem };
     void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
-  }
-
-  function handleComboSaucesDone() {
-    if (!pendingCartItem.current || !pending) return;
-    const p = pending as { type: "comboSauces"; item: PosGridItem & { kind: "combo" }; childIdx: number };
-    // siguiente hijo con salsas
-    const nextIdx = pendingCartItem.current.children.findIndex((c, i) => i > p.childIdx && c.showSauces);
-    if (nextIdx >= 0 && sauces.length > 0) {
-      setPending({ type: "comboSauces", item: p.item, childIdx: nextIdx });
-    } else {
-      commitItem(pendingCartItem.current, p.item);
-    }
   }
 
   // ---------- edicion desde mini-carrito ----------
@@ -1019,28 +1026,6 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         />
       ) : null}
 
-      {pending?.type === "comboAdditions" ? (
-        <ComboAdditionsModal
-          comboChildren={pending.item.items}
-          additions={additions}
-          additionsByChild={pending.additionsByChild}
-          onClose={cancelFlow}
-          onChange={(productId, additionId, delta) => {
-            setPending((prev) => {
-              if (!prev || prev.type !== "comboAdditions") return prev;
-              const next = new Map(prev.additionsByChild);
-              const cur = next.get(productId) ?? {};
-              next.set(productId, { ...cur, [additionId]: Math.max(0, (cur[additionId] ?? 0) + delta) });
-              return { ...prev, additionsByChild: next };
-            });
-          }}
-          onConfirm={() => {
-            if (pending.type === "comboAdditions") handleComboAdditionsDone(pending.additionsByChild);
-          }}
-          confirmLabel={pendingCartItem.current?.children.some((c) => c.showSauces) && sauces.length > 0 ? "Siguiente: Salsas" : "Agregar"}
-        />
-      ) : null}
-
       {pending?.type === "sauces" && pendingCartItem.current ? (
         <SaucesModal
           name={pending.item.name}
@@ -1060,16 +1045,32 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         />
       ) : null}
 
-      {pending?.type === "comboSauces" && pendingCartItem.current ? (() => {
+      {pending?.type === "comboChildStep" && pendingCartItem.current ? (() => {
         const child = pendingCartItem.current.children[pending.childIdx];
+        const additionQty = pending.additionsByChild.get(child.productId) ?? {};
+        const nextIdx = pendingCartItem.current.children.findIndex((c, i) =>
+          i > pending.childIdx && ((c.showAdditions && additions.length > 0) || (c.showSauces && sauces.length > 0))
+        );
         return (
-          <SaucesModal
-            name={`${pending.item.name} — ${child.name}`}
+          <ComboChildStepModal
+            comboName={pending.item.name}
+            child={child}
+            additions={additions}
+            additionQty={additionQty}
             sauces={sauces}
             maxSauces={maxSauces}
-            selected={child.sauces}
+            selectedSauces={child.sauces}
             onClose={cancelFlow}
-            onToggle={(id) => {
+            onChangeAddition={(id, delta) => {
+              setPending((prev) => {
+                if (!prev || prev.type !== "comboChildStep") return prev;
+                const next = new Map(prev.additionsByChild);
+                const cur = next.get(child.productId) ?? {};
+                next.set(child.productId, { ...cur, [id]: Math.max(0, (cur[id] ?? 0) + delta) });
+                return { ...prev, additionsByChild: next };
+              });
+            }}
+            onToggleSauce={(id) => {
               if (!pendingCartItem.current) return;
               const ci = pendingCartItem.current;
               const ch = ci.children[pending.childIdx];
@@ -1079,11 +1080,20 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
               pendingCartItem.current = { ...ci, children: ci.children.map((c, i) => i === pending.childIdx ? { ...c, sauces: newSauces } : c) };
               setPending({ ...pending });
             }}
-            onConfirm={handleComboSaucesDone}
-            confirmLabel={(() => {
-              const nextIdx = pendingCartItem.current?.children.findIndex((c, i) => i > pending.childIdx && c.showSauces) ?? -1;
-              return nextIdx >= 0 ? "Siguiente" : "Agregar";
-            })()}
+            onConfirm={() => {
+              // Aplicar adiciones acumuladas al pendingCartItem antes de avanzar
+              if (pendingCartItem.current) {
+                const addByChild = pending.additionsByChild;
+                pendingCartItem.current = {
+                  ...pendingCartItem.current,
+                  children: pendingCartItem.current.children.map((c) =>
+                    addByChild.has(c.productId) ? { ...c, additions: addByChild.get(c.productId)! } : c
+                  ),
+                };
+              }
+              handleComboChildStepDone();
+            }}
+            confirmLabel={nextIdx >= 0 ? "Siguiente" : "Agregar"}
           />
         );
       })() : null}

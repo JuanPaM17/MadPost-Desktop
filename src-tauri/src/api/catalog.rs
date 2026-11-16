@@ -85,34 +85,62 @@ async fn products(
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
 
-        // Productos activos con su categoria
         let mut stmt = conn.prepare(
             "SELECT p.id, p.name, p.category_id, COALESCE(c.name,'') AS category_name, \
-             p.price, p.description, p.stock \
+             p.price, p.description, p.stock, COALESCE(p.active,1) \
              FROM products p \
              LEFT JOIN categories c ON c.id=p.category_id \
-             WHERE p.tenant_id=?1 AND COALESCE(p.active,1)=1 \
+             WHERE p.tenant_id=?1 \
              ORDER BY c.sort_order, p.name COLLATE NOCASE"
         ).map_err(|e| e.to_string())?;
 
-        let product_rows: Vec<(String, String, Option<String>, String, f64, Option<String>, Option<f64>)> = {
+        let product_rows: Vec<(String, String, Option<String>, String, f64, Option<String>, Option<f64>, i64)> = {
             let r: Result<Vec<_>, String> = stmt.query_map(rusqlite::params![tenant_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
             }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
             r?
         };
 
         let mut result = vec![];
-        for (pid, name, cat_id, cat_name, price, description, stock) in product_rows {
-            // Opciones activas del producto
+        for (pid, name, cat_id, cat_name, price, description, stock, active) in product_rows {
+            // Opciones del producto
             let mut ostmt = conn.prepare(
-                "SELECT id, name FROM product_options WHERE product_id=?1 AND COALESCE(active,1)=1 ORDER BY sort_order, name COLLATE NOCASE"
+                "SELECT name FROM product_options WHERE product_id=?1 AND COALESCE(active,1)=1 ORDER BY sort_order, name COLLATE NOCASE"
             ).map_err(|e| e.to_string())?;
-            let options: Vec<Value> = {
+            let options: Vec<String> = {
                 let r: Result<Vec<_>, String> = ostmt.query_map(rusqlite::params![pid], |r| {
-                    Ok(serde_json::json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? }))
+                    r.get::<_, String>(0)
                 }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
                 r?
+            };
+
+            // Insumos compartidos del producto
+            let mut sstmt = conn.prepare(
+                "SELECT s.name, s.unit, s.stock, ps.quantity_per_sale \
+                 FROM product_supplies ps \
+                 JOIN supplies s ON s.id = ps.supply_id \
+                 WHERE ps.product_id=?1 \
+                 ORDER BY s.name COLLATE NOCASE"
+            ).map_err(|e| e.to_string())?;
+            let supplies: Vec<serde_json::Value> = {
+                let r: Result<Vec<_>, String> = sstmt.query_map(rusqlite::params![pid], |r| {
+                    Ok(serde_json::json!({
+                        "name":             r.get::<_, String>(0)?,
+                        "unit":             r.get::<_, String>(1)?,
+                        "stock":            r.get::<_, Option<f64>>(2)?,
+                        "quantityPerSale":  r.get::<_, f64>(3)?,
+                    }))
+                }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
+                r?
+            };
+
+            // stockMode: direct si tiene stock numerico, supplies si tiene insumos, infinite si no
+            let stock_mode = if stock.is_some() {
+                "direct"
+            } else if !supplies.is_empty() {
+                "supplies"
+            } else {
+                "infinite"
             };
 
             result.push(serde_json::json!({
@@ -121,10 +149,12 @@ async fn products(
                 "categoryId":   cat_id.unwrap_or_default(),
                 "categoryName": cat_name,
                 "price":        price,
-                "active":       true,
+                "active":       active != 0,
                 "description":  description,
                 "stock":        stock,
+                "stockMode":    stock_mode,
                 "options":      options,
+                "supplies":     supplies,
             }));
         }
 
@@ -192,20 +222,20 @@ async fn combos(
         let conn = open_db(&db_path)?;
 
         let mut cstmt = conn.prepare(
-            "SELECT id, name, price FROM combos \
-             WHERE tenant_id=?1 AND COALESCE(active,1)=1 \
+            "SELECT id, name, price, COALESCE(active,1) FROM combos \
+             WHERE tenant_id=?1 \
              ORDER BY name COLLATE NOCASE"
         ).map_err(|e| e.to_string())?;
 
-        let combo_rows: Vec<(String, String, f64)> = {
+        let combo_rows: Vec<(String, String, f64, i64)> = {
             let r: Result<Vec<_>, String> = cstmt.query_map(rusqlite::params![tenant_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
             r?
         };
 
         let mut result = vec![];
-        for (combo_id, combo_name, price) in combo_rows {
+        for (combo_id, combo_name, price, active) in combo_rows {
             // Items del combo con flags de la categoria del producto
             let mut istmt = conn.prepare(
                 "SELECT ci.product_id, p.name, ci.quantity, \
@@ -234,7 +264,7 @@ async fn combos(
                 "id":     combo_id,
                 "name":   combo_name,
                 "price":  price,
-                "active": true,
+                "active": active != 0,
                 "items":  items,
             }));
         }

@@ -81,16 +81,25 @@ function DirectStockEmpty({ message, cols = 4 }: { message: string; cols?: numbe
 
 function AdditionStockTab({ canAdjust }: { canAdjust: boolean }) { const [items, setItems] = useState<AdditionStock[]>([]); const [search, setSearch] = useState(""); const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(10); const [loading, setLoading] = useState(true); const [adjusting, setAdjusting] = useState<StockAdjustmentItem | null>(null); const filtered = useMemo(() => items.filter((item) => item.name.toLowerCase().includes(search.trim().toLowerCase())), [items, search]); const pageItems = pageSize ? filtered.slice((page - 1) * pageSize, page * pageSize) : filtered; useEffect(() => { void load(); }, []); async function load() { setLoading(true); try { setItems(await inventoryService.listAdditionsWithDirectStock()); } finally { setLoading(false); } } return <Box w="full" maxW="1120px" mx="auto"><Text mb="5" color="gray.600">Adiciones con stock propio. Asigna o ajusta stock desde aqui.</Text><Box position="relative" maxW="320px" mb="5"><Search size={17} color="#6b7280" style={{ position: "absolute", left: 12, top: 11, zIndex: 1 }} /><Input pl="10" placeholder="Buscar adicion..." value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} /></Box><Box bg="white" borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden"><Box overflowX="auto"><Table.Root size="sm" minW="600px"><Table.Header><Table.Row><Table.ColumnHeader>Adicion</Table.ColumnHeader><Table.ColumnHeader w="150px">Stock actual</Table.ColumnHeader>{canAdjust ? <Table.ColumnHeader w="180px" textAlign="right">Acciones</Table.ColumnHeader> : null}</Table.Row></Table.Header><Table.Body>{pageItems.map((item) => <Table.Row key={item.id}><Table.Cell fontWeight="semibold">{item.name}</Table.Cell><Table.Cell>{formatStock(item.stock)}</Table.Cell>{canAdjust ? <Table.Cell textAlign="right"><Button size="sm" variant="outline" onClick={() => setAdjusting({ id: item.id, name: item.name, stock: item.stock, itemType: "ADDITION" })}><Pencil size={16} />Ajustar stock</Button></Table.Cell> : null}</Table.Row>)}{loading ? <AdditionEmpty message="Cargando adiciones..." cols={canAdjust ? 3 : 2} /> : null}{!loading && !pageItems.length ? <AdditionEmpty message="No hay adiciones con stock controlado. Asigna stock a adiciones desde Productos > Adiciones." cols={canAdjust ? 3 : 2} /> : null}</Table.Body></Table.Root></Box><PaginationControls total={filtered.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} /></Box>{adjusting ? <AdjustStockDialog item={adjusting} onClose={() => setAdjusting(null)} onAdjusted={async () => { setAdjusting(null); await load(); }} /> : null}</Box>; }
 
+const MODE_COLORS = { add: { active: "purple.500", bg: "purple.50", text: "purple.700" }, subtract: { active: "red.500", bg: "red.50", text: "red.700" }, replace: { active: "blue.500", bg: "blue.50", text: "blue.700" } };
+function ModeBtn({ value, label, mode, onSelect }: { value: "add" | "subtract" | "replace"; label: string; mode: "add" | "subtract" | "replace"; onSelect: (v: "add" | "subtract" | "replace") => void }) {
+  const c = MODE_COLORS[value];
+  const active = mode === value;
+  return <button type="button" style={{ flex: 1 }} onClick={() => onSelect(value)}><Box py="2" px="4" borderRadius="md" borderWidth="2px" borderColor={active ? c.active : "gray.200"} bg={active ? c.bg : "white"} color={active ? c.text : "gray.600"} fontWeight={active ? "semibold" : "normal"} fontSize="sm" cursor="pointer">{label}</Box></button>;
+}
+
 function AdjustStockDialog({ item, onClose, onAdjusted }: { item: StockAdjustmentItem; onClose: () => void; onAdjusted: () => Promise<void> }) {
   const [mode, setMode] = useState<"add" | "subtract" | "replace">("add");
   const [amount, setAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const itemLabel = item.itemType === "SUPPLY" ? "Insumo" : item.itemType === "PRODUCT" ? "Producto" : "Adicion";
   const parsedValue = Number(amount);
   const isNegative = amount.trim() !== "" && (parsedValue < 0 || amount.trim().startsWith("-"));
   const inputError = isNegative ? "El valor debe ser positivo." : null;
   const modeColor = mode === "subtract" ? "red" : mode === "replace" ? "blue" : "purple";
+  useEffect(() => { inputRef.current?.focus(); }, [mode]);
   async function save() {
     const value = parsedValue;
     if (!Number.isFinite(value) || value <= 0) { onClose(); return; }
@@ -106,24 +115,18 @@ function AdjustStockDialog({ item, onClose, onAdjusted }: { item: StockAdjustmen
       setSaving(false);
     }
   }
-  function ModeBtn({ value, label }: { value: "add" | "subtract" | "replace"; label: string }) {
-    const colors = { add: { active: "purple.500", bg: "purple.50", text: "purple.700" }, subtract: { active: "red.500", bg: "red.50", text: "red.700" }, replace: { active: "blue.500", bg: "blue.50", text: "blue.700" } };
-    const c = colors[value];
-    const active = mode === value;
-    return <button type="button" style={{ flex: 1 }} onClick={() => setMode(value)}><Box py="2" px="4" borderRadius="md" borderWidth="2px" borderColor={active ? c.active : "gray.200"} bg={active ? c.bg : "white"} color={active ? c.text : "gray.600"} fontWeight={active ? "semibold" : "normal"} fontSize="sm" cursor="pointer">{label}</Box></button>;
-  }
   return <Modal maxW="460px">
     <Heading size="md">Ajustar stock</Heading>
     <Text mt="2" color="gray.600">{itemLabel}: {item.name} | Stock actual: {formatStock(item.stock)}{item.unit ? ` ${item.unit}` : ""}</Text>
     <Flex mt="5" gap="3">
-      <ModeBtn value="add" label="Sumar" />
-      <ModeBtn value="subtract" label="Restar" />
-      <ModeBtn value="replace" label="Reemplazar" />
+      <ModeBtn value="add" label="Sumar" mode={mode} onSelect={setMode} />
+      <ModeBtn value="subtract" label="Restar" mode={mode} onSelect={setMode} />
+      <ModeBtn value="replace" label="Reemplazar" mode={mode} onSelect={setMode} />
     </Flex>
     <Box mt="4">
       <Text mb="2" fontSize="sm" fontWeight="semibold">Cantidad</Text>
       <Input
-        autoFocus
+        ref={inputRef}
         inputMode="decimal"
         placeholder="Ej: 10"
         value={amount}

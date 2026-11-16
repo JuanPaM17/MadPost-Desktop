@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
@@ -20,6 +20,14 @@ pub fn router() -> Router<ApiContext> {
 // ---------------------------------------------------------------------------
 // Tipos
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ListSalesQuery {
+    /// attended = ventas creadas por mi (user_id)
+    /// collected = ventas cobradas por mi (collected_by_user_id)
+    /// all = todas (solo admins/managers — SELLER lo ignora y ve attended)
+    filter: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct CreateSaleBody {
@@ -246,29 +254,42 @@ async fn create_sale(
 async fn list_sales(
     State(context): State<ApiContext>,
     Extension(user): Extension<AuthUser>,
+    Query(query): Query<ListSalesQuery>,
 ) -> impl IntoResponse {
     let tenant_id = user.tenant_id.clone();
     let user_id = user.user_id.clone();
     let role = user.role.clone();
     let db_path = context.db_path.clone();
+    let filter = query.filter.as_deref().unwrap_or("attended").to_string();
 
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
 
-        let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if role == "SELLER" {
+        // SELLER siempre ve solo sus ventas, el filtro only aplica a otros roles
+        let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if role == "SELLER" || filter == "attended" {
             (
-                "SELECT s.id, s.invoice_number, s.total, s.payment_method, s.created_at, s.is_delivery, s.client_name, \
-                 COALESCE(u.display_name, u.username) AS user_display_name, \
-                 s.collected_by_display_name \
+                "SELECT s.id, s.invoice_number, s.total, s.payment_method, s.created_at, s.is_delivery, \
+                 s.client_name, COALESCE(u.display_name, u.username) AS user_display_name, \
+                 s.collected_by_display_name, s.delivery_type_name \
                  FROM sales s LEFT JOIN users u ON u.id=s.user_id \
                  WHERE s.tenant_id=?1 AND s.user_id=?2 ORDER BY s.created_at DESC".to_string(),
                 vec![Box::new(tenant_id), Box::new(user_id)],
             )
-        } else {
+        } else if filter == "collected" {
             (
-                "SELECT s.id, s.invoice_number, s.total, s.payment_method, s.created_at, s.is_delivery, s.client_name, \
-                 COALESCE(u.display_name, u.username) AS user_display_name, \
-                 s.collected_by_display_name \
+                "SELECT s.id, s.invoice_number, s.total, s.payment_method, s.created_at, s.is_delivery, \
+                 s.client_name, COALESCE(u.display_name, u.username) AS user_display_name, \
+                 s.collected_by_display_name, s.delivery_type_name \
+                 FROM sales s LEFT JOIN users u ON u.id=s.user_id \
+                 WHERE s.tenant_id=?1 AND s.collected_by_user_id=?2 ORDER BY s.created_at DESC".to_string(),
+                vec![Box::new(tenant_id), Box::new(user_id)],
+            )
+        } else {
+            // all — cualquier rol no SELLER puede ver todo
+            (
+                "SELECT s.id, s.invoice_number, s.total, s.payment_method, s.created_at, s.is_delivery, \
+                 s.client_name, COALESCE(u.display_name, u.username) AS user_display_name, \
+                 s.collected_by_display_name, s.delivery_type_name \
                  FROM sales s LEFT JOIN users u ON u.id=s.user_id \
                  WHERE s.tenant_id=?1 ORDER BY s.created_at DESC".to_string(),
                 vec![Box::new(tenant_id)],
@@ -287,6 +308,7 @@ async fn list_sales(
                 "clientName":             r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 "userDisplayName":        r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                 "collectedByDisplayName": r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                "deliveryTypeName":       r.get::<_, Option<String>>(9)?.unwrap_or_default(),
             }))
         }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
 
@@ -323,7 +345,8 @@ async fn get_sale(
              s.collected_by_display_name, \
              cs.session_number, \
              s.cash_given, s.change_given, s.cash_amount, s.card_amount, \
-             s.subtotal, s.discount_type, s.discount_value \
+             s.subtotal, s.discount_type, s.discount_value, \
+             s.delivery_type_name, s.delivery_price \
              FROM sales s \
              LEFT JOIN users u ON u.id=s.user_id \
              LEFT JOIN cash_sessions cs ON cs.id=s.cash_session_id \
@@ -348,6 +371,8 @@ async fn get_sale(
                 r.get::<_, Option<f64>>(15)?,
                 r.get::<_, Option<String>>(16)?,
                 r.get::<_, Option<f64>>(17)?,
+                r.get::<_, Option<String>>(18)?,
+                r.get::<_, Option<f64>>(19)?,
             )),
         ).optional().map_err(|e| e.to_string())?;
 
@@ -421,9 +446,47 @@ async fn get_sale(
             items_json.push(item_json);
         }
 
+        // Stock logs de esta venta, identificados por invoice_number en item_name
+        let invoice_number = s.1.clone().unwrap_or_default();
+        let like_pat = format!("%[Factura {}]%", invoice_number);
+        let mut slstmt = conn.prepare(
+            "SELECT item_type, item_name, delta, stock_before, stock_after \
+             FROM stock_logs \
+             WHERE tenant_id=?1 AND item_name LIKE ?2 \
+             ORDER BY created_at ASC",
+        ).map_err(|e| e.to_string())?;
+
+        let suffix_pat = format!("[Factura {}]", invoice_number);
+        let stock_logs: Vec<Value> = {
+            let r: Result<Vec<_>, _> = slstmt.query_map(
+                rusqlite::params![tenant_id, like_pat],
+                |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, Option<f64>>(4)?,
+                )),
+            ).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
+            r?.into_iter().map(|(item_type, item_name, delta, before, after)| {
+                // Quitar sufijo "[Factura ...]" del nombre
+                let clean_name = item_name
+                    .trim_end_matches(&*suffix_pat)
+                    .trim()
+                    .to_string();
+                serde_json::json!({
+                    "itemType":   item_type,
+                    "itemName":   clean_name,
+                    "delta":      delta,
+                    "stockBefore": before,
+                    "stockAfter":  after,
+                })
+            }).collect()
+        };
+
         Ok(Some(serde_json::json!({
             "id":                     s.0,
-            "invoiceNumber":          s.1.unwrap_or_default(),
+            "invoiceNumber":          invoice_number,
             "total":                  s.2,
             "paymentMethod":          s.3.unwrap_or_default(),
             "createdAt":              s.4,
@@ -440,7 +503,10 @@ async fn get_sale(
             "subtotal":               s.15.unwrap_or(s.2),
             "discountType":           s.16.unwrap_or_default(),
             "discountValue":          s.17.unwrap_or(0.0),
+            "deliveryTypeName":       s.18.unwrap_or_default(),
+            "deliveryPrice":          s.19.unwrap_or(0.0),
             "items":                  items_json,
+            "stockLogs":              stock_logs,
         })))
     }).await;
 

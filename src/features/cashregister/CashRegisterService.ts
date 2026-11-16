@@ -71,14 +71,8 @@ class CashRegisterService {
   async listSessions() {
     const session = this.session();
     const database = await databaseManager.database();
-    const where =
-      session.user.role === "SELLER"
-        ? "cs.tenant_id=$1 AND cs.user_id=$2"
-        : "cs.tenant_id=$1";
-    const params =
-      session.user.role === "SELLER"
-        ? [session.tenantId, session.user.id]
-        : [session.tenantId];
+    const where = "cs.tenant_id=$1";
+    const params = [session.tenantId];
     const rows = await database.select<SessionRow[]>(
       `${sessionQuery} WHERE ${where} ORDER BY cs.opened_at DESC`,
       params,

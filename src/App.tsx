@@ -113,6 +113,7 @@ function App() {
     await postLoginCoordinator.start({
       tenantId: tenant.id,
       tenantName: tenant.name,
+      tenantAddress: tenant.address ?? "",
       syncEnabled: cachedLicense?.sync_enabled === 1,
       isDemo,
     });

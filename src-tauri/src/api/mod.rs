@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cash;
 pub mod catalog;
 pub mod config;
+pub mod dashboard;
 pub mod sales;
 pub mod tables;
 
@@ -24,6 +25,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 pub struct ApiContext {
     pub tenant_id: String,
     pub tenant_name: String,
+    pub tenant_address: String,
     pub db_path: String,
     pub jwt_secret: String,
     pub clients: Arc<Mutex<HashMap<String, WsClientInfo>>>,

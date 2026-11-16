@@ -56,7 +56,29 @@ Un pre-release es una version real del instalador que se publica en GitHub pero 
 3. El numero de version del pre-release debe ser mayor al `latestVersion` actual en `update-config.json`. Ejemplo: si `latestVersion` es `1.8.0`, el pre-release puede ser `1.9.0`.
 4. Cuando el pre-release se aprueba y pasa a release oficial, se actualiza `update-config.json` con ese numero y se crea un nuevo release normal (o se edita el existente quitando el flag `--prerelease`).
 
-### Como publicar un pre-release
+### Como publicar un pre-release con el script (nuevo flujo)
+
+```powershell
+# 1. Actualizar version en los tres archivos de codigo
+#    package.json | src-tauri/tauri.conf.json | src-tauri/Cargo.toml
+#    NO tocar update-config.json
+
+# 2. Commit y tag
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git commit -m "feat: vX.Y.Z-beta.N - descripcion breve (pre-release)"
+git tag vX.Y.Z-beta.N
+git push origin main
+git push origin vX.Y.Z-beta.N
+
+# 3. Publicar con el script
+#    El script carga la clave de firma automaticamente desde .env en la raiz del proyecto.
+.\scripts\publish-release.ps1 -Version "X.Y.Z-beta.N" -Channel beta -Notes "Descripcion del pre-release"
+```
+
+El script: compila, genera `.exe` + `.sig` firmado, crea el release en GitHub con `--prerelease`,
+sube los assets renombrados, genera `beta-latest.json` con la firma real y actualiza la rama `releases-manifest`.
+
+### Como publicar un pre-release (flujo manual anterior — referencia)
 
 #### Paso 1 — Actualizar version en los cuatro archivos (igual que un release normal)
 
@@ -121,10 +143,71 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64
 4. Siempre actualizar `src-tauri/tauri.conf.json` (version) y `src-tauri/Cargo.toml` (version) con el mismo numero
 5. El tag de git debe ser `vX.Y.Z` (con la v minuscula adelante)
 6. Siempre actualizar `update-config.json` en la raiz del repo como parte del release (ver abajo)
+7. Usar `scripts/publish-release.ps1` para publicar — genera firma, manifiesto y actualiza la rama `releases-manifest`
+8. Los archivos `stable-latest.json` y `beta-latest.json` en la rama `releases-manifest` NO se editan manualmente
+
+### Archivos involucrados en cada release
+
+| Archivo | Que contiene | Cuando actualizar |
+|---|---|---|
+| `package.json` | version del proyecto | Siempre antes del commit de release |
+| `src-tauri/tauri.conf.json` | version + config del bundle | Siempre antes del commit |
+| `src-tauri/Cargo.toml` | version del binario Rust | Siempre antes del commit |
+| `update-config.json` | latestVersion + minimumVersion | Despues del release (actualizador actual) |
+| `releases-manifest/stable-latest.json` | manifiesto Tauri v2 estable | Automatico via `publish-release.ps1` |
+| `releases-manifest/beta-latest.json` | manifiesto Tauri v2 beta | Automatico via `publish-release.ps1` |
 
 ---
 
 ## Como publicar una nueva version
+
+### Flujo rapido con el script (nuevo — recomendado desde v1.9.0)
+
+```powershell
+# 1. Actualizar version en los tres archivos de codigo
+#    package.json | src-tauri/tauri.conf.json | src-tauri/Cargo.toml
+
+# 2. Commit y tag
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git commit -m "feat: vX.Y.Z - descripcion breve"
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
+
+# 3. Publicar (compila + firma + sube release + actualiza manifiesto)
+#    El script carga la clave de firma automaticamente desde .env en la raiz del proyecto.
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "Descripcion para los clientes"
+
+# 5. Actualizar update-config.json (para el actualizador actual)
+#    Editar latestVersion y minimumVersion segun corresponda, luego:
+git add update-config.json
+git commit -m "chore: bump update-config to X.Y.Z"
+git push origin main
+```
+
+El script genera automaticamente:
+- `src-tauri/target/release/bundle/nsis/MadPost Desktop_X.Y.Z_x64-setup.exe` (compilado)
+- `MadPost Desktop_X.Y.Z_x64-setup.exe.sig` (firma criptografica del instalador)
+- El release en GitHub con ambos archivos (renombrados con punto: `MadPost.Desktop_X.Y.Z_x64-setup.exe`)
+- `stable-latest.json` subido como asset del release y en la rama `releases-manifest`
+
+Opciones utiles:
+```powershell
+# Simular sin publicar nada (dry-run)
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "..." -DryRun
+
+# Usar notas desde archivo
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -NotesFile ".\CHANGELOG.md"
+
+# Usar artefacto ya compilado (sin recompilar)
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "..." -SkipBuild
+```
+
+Ver documentacion completa: `UpdatePlan/FASE2_PUBLICACION_LOCAL.md`
+
+---
+
+### Flujo manual paso a paso (referencia — flujo anterior)
 
 ### 1. Actualizar la version en cuatro archivos
 
@@ -228,12 +311,22 @@ git push origin vX.Y.Z
 npm run tauri build
 ```
 
-El archivo queda en: `src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64-setup.exe`
+El archivo queda en: `src-tauri/target/release/bundle/nsis/MadPost Desktop_X.Y.Z_x64-setup.exe`
+
+Nota: el nombre real tiene espacio, no guion bajo entre "MadPost" y "Desktop".
+El script `publish-release.ps1` lo renombra a `MadPost.Desktop_X.Y.Z_x64-setup.exe` al subir.
+
+Si compilaste con `TAURI_SIGNING_PRIVATE_KEY` definida, tambien se genera:
+`src-tauri/target/release/bundle/nsis/MadPost Desktop_X.Y.Z_x64-setup.exe.sig`
 
 ### 6. Crear el release en GitHub y subir el instalador
 
-```bash
-gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost_X.Y.Z_x64-setup.exe" --title "vX.Y.Z" --notes "Descripcion de cambios, no ser tan tecnico"
+```powershell
+# Con el nuevo script (recomendado — maneja firma, manifiesto y rama automaticamente):
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "Descripcion de cambios"
+
+# Manual (flujo anterior, sin firma ni manifiesto):
+gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost Desktop_X.Y.Z_x64-setup.exe" --title "vX.Y.Z" --notes "Descripcion de cambios, no ser tan tecnico"
 ```
 
 > Nota: entre el paso 4 y el 6 existe una ventana donde el tag esta en GitHub pero el release aun no.

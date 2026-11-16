@@ -6,15 +6,18 @@ mod update_installer;
 use serde::Serialize;
 use std::{env, fs, process::Command};
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, check_for_update, list_releases, install_update, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, check_for_update, list_releases, install_update, check_for_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -27,8 +30,8 @@ fn get_hostname() -> String {
 }
 
 #[tauri::command]
-fn start_mobile_api(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_id: String, tenant_name: String) -> mobile_api::NativeResult {
-    mobile_api::start_api(&state, tenant_id, tenant_name)
+fn start_mobile_api(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_id: String, tenant_name: String, tenant_address: String) -> mobile_api::NativeResult {
+    mobile_api::start_api(&state, tenant_id, tenant_name, tenant_address)
 }
 
 #[tauri::command]
@@ -37,8 +40,8 @@ fn stop_mobile_api(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> m
 fn mobile_api_status(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::MobileApiStatus { mobile_api::api_status(&state) }
 
 #[tauri::command]
-fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_id: String, tenant_name: String) -> mobile_api::NativeResult {
-    mobile_api::publish_mdns(&state, tenant_id, tenant_name)
+fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_id: String, tenant_name: String, tenant_address: String) -> mobile_api::NativeResult {
+    mobile_api::publish_mdns(&state, tenant_id, tenant_name, tenant_address)
 }
 
 #[tauri::command]
@@ -61,6 +64,89 @@ async fn list_releases(prerelease_access: bool) -> Vec<update_installer::Release
 #[tauri::command]
 fn install_update(app: tauri::AppHandle, download_url: String) -> update_installer::UpdateInstallResult {
     update_installer::install_and_exit(app, download_url)
+}
+
+/// Resultado del check con el plugin oficial de Tauri Updater v2.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateV2Result {
+    pub available: bool,
+    pub version: Option<String>,
+    pub current_version: String,
+    pub release_notes: Option<String>,
+    pub pub_date: Option<String>,
+}
+
+/// Verifica actualizaciones usando tauri-plugin-updater con el endpoint del canal indicado.
+/// El token de GitHub se inyecta como header para acceder a los assets del repo privado.
+/// "stable" apunta a stable-latest.json; "beta" apunta a beta-latest.json.
+/// Ambos manifiestos se sirven como assets del release, accesibles con el token.
+#[tauri::command]
+async fn check_for_update_v2(app: tauri::AppHandle, channel: String) -> Result<UpdateV2Result, String> {
+    if cfg!(debug_assertions) {
+        return Ok(UpdateV2Result {
+            available: false,
+            version: None,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            release_notes: None,
+            pub_date: None,
+        });
+    }
+
+    let repo = option_env!("MADPOST_GITHUB_REPO").unwrap_or("");
+    if repo.is_empty() {
+        return Err("MADPOST_GITHUB_REPO no configurado en el binario.".to_string());
+    }
+
+    let manifest_name = match channel.as_str() {
+        "beta" => "beta-latest.json",
+        _ => "stable-latest.json",
+    };
+
+    // El manifiesto mas reciente siempre se sube como asset del release mas nuevo del canal.
+    // Construimos la URL de la API de assets para descargarlo con autenticacion.
+    // Formato: https://api.github.com/repos/{repo}/releases/latest para stable,
+    // o el primer pre-release para beta. Usamos la URL de raw del asset via
+    // releases/download que el plugin puede consumir directamente con el header de auth.
+    //
+    // Para el plugin de Tauri, el endpoint debe ser una URL que retorne el JSON del manifiesto.
+    // Usamos raw.githubusercontent.com de la rama releases-manifest como endpoint primario.
+    // Para repo privado esto requiere token — lo pasamos como header personalizado.
+    let endpoint = format!(
+        "https://raw.githubusercontent.com/{repo}/releases-manifest/{manifest_name}"
+    );
+
+    let mut builder = app.updater_builder()
+        .endpoints(vec![
+            endpoint.parse().map_err(|e| format!("URL de endpoint invalida: {e}"))?
+        ])
+        .map_err(|e| format!("No se pudo configurar el endpoint: {e}"))?;
+
+    // Inyectar token de GitHub para acceder al repo privado
+    if let Some(token) = option_env!("MADPOST_GITHUB_TOKEN").filter(|t| !t.is_empty()) {
+        builder = builder.header("Authorization", format!("Bearer {token}"))
+            .map_err(|e| format!("No se pudo configurar el header de autenticacion: {e}"))?;
+    }
+
+    let updater = builder.build().map_err(|e| format!("No se pudo construir el updater: {e}"))?;
+
+    match updater.check().await {
+        Ok(Some(update)) => Ok(UpdateV2Result {
+            available: true,
+            version: Some(update.version.clone()),
+            current_version: update.current_version.clone(),
+            release_notes: update.body.clone(),
+            pub_date: update.date.map(|d| d.to_string()),
+        }),
+        Ok(None) => Ok(UpdateV2Result {
+            available: false,
+            version: None,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            release_notes: None,
+            pub_date: None,
+        }),
+        Err(e) => Err(format!("Error al verificar actualizaciones: {e}")),
+    }
 }
 
 #[tauri::command]

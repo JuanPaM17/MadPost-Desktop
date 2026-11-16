@@ -14,6 +14,7 @@ use super::{broadcast, ApiContext, AuthUser};
 pub fn router() -> Router<ApiContext> {
     Router::new()
         .route("/api/v1/tables", get(get_tables))
+        .route("/api/v1/tables/floor-plan", get(get_floor_plan))
         .route("/api/v1/tables/{id}", get(get_table))
         .route("/api/v1/tables/{id}/order", get(get_order).post(open_order))
         .route("/api/v1/tables/{id}/order/clients", post(add_client))
@@ -310,6 +311,127 @@ fn build_comanda_lines(
 
 // ---------------------------------------------------------------------------
 // GET /tables
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/tables/floor-plan
+// Retorna mesas con estado + elementos decorativos (paredes) + lista de pisos
+// ---------------------------------------------------------------------------
+
+async fn get_floor_plan(
+    State(context): State<ApiContext>,
+    Extension(user): Extension<AuthUser>,
+) -> impl IntoResponse {
+    let tenant_id = user.tenant_id.clone();
+    let db_path = context.db_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> DbResult<Value> {
+        let conn = open_db(&db_path)?;
+
+        // ── Mesas (TABLE) ──────────────────────────────────────────────────
+        let mut tstmt = conn.prepare(
+            "SELECT id, name, shape, pos_x, pos_y, width, height, floor \
+             FROM restaurant_tables \
+             WHERE tenant_id=?1 AND COALESCE(active,1)=1 AND COALESCE(type,'TABLE')='TABLE' \
+             ORDER BY floor ASC, name COLLATE NOCASE",
+        ).map_err(|e| e.to_string())?;
+
+        let table_rows: Vec<(String, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<i64>)> =
+            tstmt.query_map(rusqlite::params![tenant_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+        let mut tables_json = vec![];
+        let mut floors_set = std::collections::BTreeSet::new();
+
+        for (tid, tname, shape, pos_x, pos_y, width, height, floor) in table_rows {
+            let f = floor.unwrap_or(1);
+            floors_set.insert(f);
+            let order = db_open_order(&conn, &tid)?;
+            let entry = if let Some((oid, _, _, _, _, _, opened_at, comanda_sent)) = &order {
+                let clients = db_clients(&conn, oid)?;
+                let active_clients: Vec<_> = clients.iter().filter(|c| c.3 != "CANCELLED").collect();
+                let client_names: Vec<String> = active_clients.iter().map(|c| {
+                    c.1.clone().unwrap_or_else(|| format!("Cliente {}", c.2))
+                }).collect();
+                serde_json::json!({
+                    "id": tid, "name": tname,
+                    "shape": shape.unwrap_or_default(),
+                    "floor": f,
+                    "posX": pos_x.unwrap_or(0.0), "posY": pos_y.unwrap_or(0.0),
+                    "width": width.unwrap_or(100.0), "height": height.unwrap_or(100.0),
+                    "status": "OPEN",
+                    "activeOrderId": oid,
+                    "clientCount": active_clients.len(),
+                    "openedAt": opened_at,
+                    "hasComanda": *comanda_sent != 0,
+                    "clientNames": client_names,
+                })
+            } else {
+                serde_json::json!({
+                    "id": tid, "name": tname,
+                    "shape": shape.unwrap_or_default(),
+                    "floor": f,
+                    "posX": pos_x.unwrap_or(0.0), "posY": pos_y.unwrap_or(0.0),
+                    "width": width.unwrap_or(100.0), "height": height.unwrap_or(100.0),
+                    "status": "FREE",
+                    "activeOrderId": null,
+                    "clientCount": 0,
+                    "openedAt": null,
+                    "hasComanda": false,
+                    "clientNames": [],
+                })
+            };
+            tables_json.push(entry);
+        }
+
+        // ── Elementos decorativos (WALL, etc.) ─────────────────────────────
+        let mut estmt = conn.prepare(
+            "SELECT id, name, COALESCE(type,'WALL') as etype, pos_x, pos_y, width, height, floor, color \
+             FROM restaurant_tables \
+             WHERE tenant_id=?1 AND COALESCE(active,1)=1 AND COALESCE(type,'TABLE') != 'TABLE' \
+             ORDER BY floor ASC, rowid ASC",
+        ).map_err(|e| e.to_string())?;
+
+        let elements_json: Vec<Value> = estmt.query_map(rusqlite::params![tenant_id], |r| {
+            Ok(serde_json::json!({
+                "id":     r.get::<_, String>(0)?,
+                "name":   r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                "type":   r.get::<_, String>(2)?,
+                "posX":   r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                "posY":   r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                "width":  r.get::<_, Option<f64>>(5)?.unwrap_or(80.0),
+                "height": r.get::<_, Option<f64>>(6)?.unwrap_or(20.0),
+                "floor":  r.get::<_, Option<i64>>(7)?.unwrap_or(1),
+                "color":  r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "#d1d5db".to_string()),
+            }))
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+        // Agregar pisos de elementos al set
+        for el in &elements_json {
+            if let Some(f) = el.get("floor").and_then(|v| v.as_i64()) {
+                floors_set.insert(f);
+            }
+        }
+
+        let floors: Vec<i64> = floors_set.into_iter().collect();
+
+        Ok(serde_json::json!({
+            "tables":   tables_json,
+            "elements": elements_json,
+            "floors":   if floors.is_empty() { vec![1i64] } else { floors },
+        }))
+    }).await;
+
+    match result {
+        Ok(Ok(v)) => (StatusCode::OK, Json(v)).into_response(),
+        Ok(Err(e)) => err500(e).into_response(),
+        Err(_) => err500("Error interno.").into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/tables
 // ---------------------------------------------------------------------------
 
 async fn get_tables(

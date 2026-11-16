@@ -62,7 +62,7 @@ struct WsQueryParams { token: Option<String> }
 // Ciclo de vida del servidor
 // ---------------------------------------------------------------------------
 
-pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: String) -> NativeResult {
+pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: String, tenant_address: String) -> NativeResult {
     let mut api = match state.api.lock() {
         Ok(v) => v,
         Err(_) => return NativeResult { active: false, message: "API state lock unavailable".to_string() },
@@ -100,6 +100,7 @@ pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: Str
     let context = ApiContext {
         tenant_id,
         tenant_name,
+        tenant_address,
         db_path,
         jwt_secret,
         clients: Arc::clone(&state.clients),
@@ -153,7 +154,7 @@ pub fn api_status(state: &MobileRuntimeState) -> MobileApiStatus {
 // mDNS
 // ---------------------------------------------------------------------------
 
-pub fn publish_mdns(state: &MobileRuntimeState, tenant_id: String, tenant_name: String) -> NativeResult {
+pub fn publish_mdns(state: &MobileRuntimeState, tenant_id: String, tenant_name: String, tenant_address: String) -> NativeResult {
     let mut mdns = match state.mdns.lock() {
         Ok(v) => v,
         Err(_) => return NativeResult { active: false, message: "mDNS state lock unavailable".to_string() },
@@ -173,6 +174,7 @@ pub fn publish_mdns(state: &MobileRuntimeState, tenant_id: String, tenant_name: 
     properties.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
     properties.insert("tenantId".to_string(), tenant_id);
     properties.insert("tenantName".to_string(), tenant_name);
+    properties.insert("tenantAddress".to_string(), tenant_address);
     let service = match ServiceInfo::new("_madpost._tcp.local.", &instance_name, "madpost.local.", "", API_PORT, properties) {
         Ok(s) => s,
         Err(e) => return NativeResult { active: false, message: format!("mDNS service configuration failed: {e}") },
@@ -211,17 +213,34 @@ fn router(context: ApiContext) -> Router {
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers(Any);
 
-    let public = crate::api::auth::router()
-        .route("/ws", get(websocket));
+    let public = crate::api::auth::public_router()
+        .route("/ws", get(websocket))
+        .route("/madpost-discovery", get(discovery));
 
-    let protected = crate::api::catalog::router()
+    let protected = crate::api::auth::protected_router()
+        .merge(crate::api::catalog::router())
         .merge(crate::api::config::router())
         .merge(crate::api::cash::router())
+        .merge(crate::api::dashboard::router())
         .merge(crate::api::sales::router())
         .merge(crate::api::tables::router())
         .layer(middleware::from_fn_with_state(context.clone(), auth_middleware));
 
     public.merge(protected).with_state(context).layer(cors)
+}
+
+// ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+async fn discovery(State(context): State<ApiContext>) -> impl axum::response::IntoResponse {
+    axum::Json(serde_json::json!({
+        "tenantId": context.tenant_id,
+        "tenantName": context.tenant_name,
+        "tenantAddress": context.tenant_address,
+        "version": env!("CARGO_PKG_VERSION"),
+        "port": API_PORT,
+    }))
 }
 
 // ---------------------------------------------------------------------------
