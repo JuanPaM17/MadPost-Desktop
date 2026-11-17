@@ -34,6 +34,12 @@
     Si se indica, usa el artefacto ya compilado en la carpeta bundle. Exige
     verificacion extra de que el .exe corresponde exactamente a la version indicada.
 
+.PARAMETER UpdateOnly
+    Recompila y reemplaza solo los assets (.exe, .sig, manifiesto) de un release ya
+    existente en GitHub. Util cuando el release existe pero el build fue incorrecto
+    o se quiere regenerar con una compilacion mas reciente. No crea tag ni release nuevo.
+    Requiere que el tag v{Version} y el release ya existan en GitHub.
+
 .PARAMETER DryRun
     Ejecuta todas las validaciones y genera el JSON localmente pero NO crea tags,
     releases, commits ni modifica la rama remota.
@@ -45,6 +51,7 @@
     .\scripts\publish-release.ps1 -Version "1.9.0" -Channel stable -Notes "Mejoras y correcciones"
     .\scripts\publish-release.ps1 -Version "1.10.0-beta.1" -Channel beta -Notes "Vista previa" -DryRun
     .\scripts\publish-release.ps1 -Version "1.9.0" -Channel stable -NotesFile ".\CHANGELOG.md" -SkipBuild
+    .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -Notes "..." -UpdateOnly
 #>
 
 [CmdletBinding()]
@@ -54,6 +61,7 @@ param(
     [string]$Notes,
     [string]$NotesFile,
     [switch]$SkipBuild,
+    [switch]$UpdateOnly,
     [switch]$DryRun,
     [string]$Repo
 )
@@ -269,10 +277,18 @@ $tagExists = git tag -l "v$Version"
 $null = gh release view "v$Version" --repo $Repo 2>&1
 $releaseAlreadyExists = ($LASTEXITCODE -eq 0)
 $ErrorActionPreference = "Stop"
-if ($releaseAlreadyExists) {
-    Write-Fail "El release v$Version ya existe en GitHub. Para reintento de manifiesto usa -SkipBuild."
+
+if ($UpdateOnly) {
+    if (-not $releaseAlreadyExists) {
+        Write-Fail "UpdateOnly requiere que el release v$Version ya exista en GitHub. Publicalo primero sin -UpdateOnly."
+    }
+    Write-Ok "UpdateOnly: release v$Version encontrado, se reemplazaran los assets"
+} else {
+    if ($releaseAlreadyExists) {
+        Write-Fail "El release v$Version ya existe en GitHub. Para reemplazar assets usa -UpdateOnly."
+    }
+    Write-Ok "Tag verificado"
 }
-Write-Ok "Tag verificado"
 
 # ---------------------------------------------------------------------------
 # 5. BUILD O VERIFICACION DE ARTEFACTO EXISTENTE
@@ -368,24 +384,37 @@ if ($DryRun) {
 }
 
 # ---------------------------------------------------------------------------
-# 7. CREAR GITHUB RELEASE Y SUBIR ASSETS
+# 7. CREAR GITHUB RELEASE O LIMPIAR ASSETS EXISTENTES (UpdateOnly)
 # ---------------------------------------------------------------------------
-Write-Step "Creando GitHub Release v$Version"
+if ($UpdateOnly) {
+    Write-Step "UpdateOnly: eliminando assets anteriores de v$Version"
+    # Obtener nombres de assets actuales y borrarlos para poder subir los nuevos
+    $existingAssets = gh release view "v$Version" --repo $Repo --json assets | ConvertFrom-Json
+    foreach ($asset in $existingAssets.assets) {
+        if ($asset.name -in @($githubAssetName, $githubSigName, $manifestFileName)) {
+            $ErrorActionPreference = "Continue"
+            gh release delete-asset "v$Version" $asset.name --repo $Repo --yes 2>&1 | Out-Null
+            $ErrorActionPreference = "Stop"
+            Write-Ok "Asset eliminado: $($asset.name)"
+        }
+    }
+} else {
+    Write-Step "Creando GitHub Release v$Version"
+    $releaseArgs = @(
+        "release", "create", "v$Version",
+        "--repo", $Repo,
+        "--title", "v$Version",
+        "--notes", $Notes
+    )
+    if ($Channel -eq "beta") { $releaseArgs += "--prerelease" }
 
-$releaseArgs = @(
-    "release", "create", "v$Version",
-    "--repo", $Repo,
-    "--title", "v$Version",
-    "--notes", $Notes
-)
-if ($Channel -eq "beta") { $releaseArgs += "--prerelease" }
-
-$ErrorActionPreference = "Continue"
-gh @releaseArgs
-$createEc = $LASTEXITCODE
-$ErrorActionPreference = "Stop"
-if ($createEc -ne 0) { Write-Fail "gh release create fallo. El release NO se creo." }
-Write-Ok "Release v$Version creado"
+    $ErrorActionPreference = "Continue"
+    gh @releaseArgs
+    $createEc = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($createEc -ne 0) { Write-Fail "gh release create fallo. El release NO se creo." }
+    Write-Ok "Release v$Version creado"
+}
 
 # Subir .exe (renombrado con punto para consistencia con releases anteriores)
 Write-Step "Subiendo assets al release"

@@ -26,7 +26,7 @@ export default defineConfig(({ mode }) => {
         madpostBaseUrl: environment["madpost.base_url"] ?? "https://madpost.bizzify.lat",
       }),
       __MADPOST_VERSION__: JSON.stringify(packageJson.version),
-      __USE_TAURI_UPDATER__: JSON.stringify(environment["USE_TAURI_UPDATER"] === "true"),
+      __USE_TAURI_UPDATER__: JSON.stringify(true),
     },
     plugins: [react()],
     clearScreen: false,

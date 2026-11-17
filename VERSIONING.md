@@ -201,6 +201,9 @@ Opciones utiles:
 
 # Usar artefacto ya compilado (sin recompilar)
 .\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "..." -SkipBuild
+
+# Recompilar y reemplazar assets de un release ya existente (sin crear tag ni release nuevo)
+.\scripts\publish-release.ps1 -Version "X.Y.Z" -Channel stable -Notes "..." -UpdateOnly
 ```
 
 Ver documentacion completa: `UpdatePlan/FASE2_PUBLICACION_LOCAL.md`
