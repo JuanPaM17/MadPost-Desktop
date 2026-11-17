@@ -36,9 +36,13 @@
 
 .PARAMETER UpdateOnly
     Recompila y reemplaza solo los assets (.exe, .sig, manifiesto) de un release ya
-    existente en GitHub. Util cuando el release existe pero el build fue incorrecto
-    o se quiere regenerar con una compilacion mas reciente. No crea tag ni release nuevo.
+    existente en GitHub. No crea tag ni release nuevo. Las notas NO se modifican a
+    menos que se pase -Notes o -NotesFile explicitamente.
     Requiere que el tag v{Version} y el release ya existan en GitHub.
+
+.PARAMETER NotesOnly
+    Edita solo las notas de un release existente en GitHub. No recompila ni modifica
+    assets. Requiere -Notes o -NotesFile. El release ya debe existir.
 
 .PARAMETER DryRun
     Ejecuta todas las validaciones y genera el JSON localmente pero NO crea tags,
@@ -51,7 +55,8 @@
     .\scripts\publish-release.ps1 -Version "1.9.0" -Channel stable -Notes "Mejoras y correcciones"
     .\scripts\publish-release.ps1 -Version "1.10.0-beta.1" -Channel beta -Notes "Vista previa" -DryRun
     .\scripts\publish-release.ps1 -Version "1.9.0" -Channel stable -NotesFile ".\CHANGELOG.md" -SkipBuild
-    .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -Notes "..." -UpdateOnly
+    .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -UpdateOnly
+    .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -Notes "Nuevas notas" -NotesOnly
 #>
 
 [CmdletBinding()]
@@ -62,6 +67,7 @@ param(
     [string]$NotesFile,
     [switch]$SkipBuild,
     [switch]$UpdateOnly,
+    [switch]$NotesOnly,
     [switch]$DryRun,
     [string]$Repo
 )
@@ -240,7 +246,38 @@ if ($NotesFile) {
     if (-not (Test-Path $NotesFile)) { Write-Fail "NotesFile no encontrado: $NotesFile" }
     $Notes = Get-Content $NotesFile -Raw -Encoding UTF8
 }
-if (-not $Notes) { Write-Fail "Debes proporcionar -Notes o -NotesFile con la descripcion del release." }
+# NotesOnly siempre requiere notas explicitas
+if ($NotesOnly -and -not $Notes) { Write-Fail "-NotesOnly requiere -Notes o -NotesFile con el nuevo texto." }
+# Release nuevo siempre requiere notas
+if (-not $UpdateOnly -and -not $NotesOnly -and -not $Notes) {
+    Write-Fail "Debes proporcionar -Notes o -NotesFile con la descripcion del release."
+}
+# UpdateOnly sin notas: leer las notas actuales del release para incluirlas en el manifiesto
+if ($UpdateOnly -and -not $Notes) {
+    Write-Step "Leyendo notas actuales del release v$Version"
+    $ErrorActionPreference = "Continue"
+    $existingRelease = gh release view "v$Version" --repo $Repo --json body | ConvertFrom-Json
+    $ErrorActionPreference = "Stop"
+    $Notes = if ($existingRelease.body) { $existingRelease.body } else { "" }
+    Write-Ok "Notas leidas del release existente"
+}
+
+# ---------------------------------------------------------------------------
+# 2b. NOTESONLY: editar solo las notas y salir
+# ---------------------------------------------------------------------------
+if ($NotesOnly) {
+    Write-Step "NotesOnly: actualizando notas del release v$Version"
+    $ErrorActionPreference = "Continue"
+    $null = gh release view "v$Version" --repo $Repo 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Fail "NotesOnly requiere que el release v$Version ya exista en GitHub." }
+    gh release edit "v$Version" --repo $Repo --notes $Notes
+    $editEc = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($editEc -ne 0) { Write-Fail "gh release edit fallo." }
+    Write-Ok "Notas del release v$Version actualizadas"
+    Write-Host "`n[NotesOnly completado] Solo se editaron las notas. Sin recompilacion ni cambio de assets." -ForegroundColor Green
+    exit 0
+}
 
 # ---------------------------------------------------------------------------
 # 3. VERIFICAR COINCIDENCIA DE VERSION EN PROYECTO
