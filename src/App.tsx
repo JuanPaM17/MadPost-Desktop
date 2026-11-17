@@ -1,5 +1,6 @@
 import { Box, Button, Flex, Heading, Spinner, Text } from "@chakra-ui/react";
-import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { startApplication } from "./app/ApplicationBootstrap";
 import { migrationService, type MigrationProgress } from "./features/migration/MigrationService";
 import type { LocalUser } from "./core/types";
@@ -13,8 +14,8 @@ import { MainView } from "./features/main/MainView";
 import { postLoginCoordinator } from "./features/runtime/PostLoginCoordinator";
 import { configService } from "./features/setup/ConfigService";
 import { rolesService } from "./features/roles/RolesService";
-import { UpdateDialog } from "./features/update/UpdateDialog";
-import { updateService, type UpdateInfo } from "./features/update/UpdateService";
+import { tauriUpdaterService, type UpdateV2Info } from "./features/update/TauriUpdaterService";
+import { UpdateStepsModal, makeInitialSteps, type InstallStep } from "./features/update/UpdateStepsModal";
 import { backupService } from "./features/backup/BackupService";
 import { sessionContext } from "./core/session/SessionContext";
 import { auditService } from "./features/audit/AuditService";
@@ -28,10 +29,13 @@ function App() {
   const [user, setUser] = useState<LocalUser | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
-  const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateV2Info | null>(null);
+  const [updateSteps, setUpdateSteps] = useState<InstallStep[]>(makeInitialSteps());
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateDownloadedBytes, setUpdateDownloadedBytes] = useState(0);
+  const [updateTotalBytes, setUpdateTotalBytes] = useState<number | null>(null);
   const [migrationProgress, setMigrationProgress] = useState<MigrationProgress | null>(null);
   const [migrationCountdown, setMigrationCountdown] = useState<number | null>(null);
-  const updateDecision = useRef<(() => void) | null>(null);
 
   useEffect(() => { void boot(); }, []);
 
@@ -92,6 +96,102 @@ function App() {
     await showMain(await authService.login(tenant.id, username, password));
   }
 
+  async function checkForUpdateV2() {
+    try {
+      const { licenseService } = await import("./features/license/LicenseService");
+      const prereleaseAccess = await licenseService.hasPrereleaseAccess();
+      const channel = prereleaseAccess ? "beta" : "stable";
+      const result = await tauriUpdaterService.checkV2(channel);
+      if (result.available) setPendingUpdate(result);
+    } catch {
+      // silencioso -- no interrumpir el flujo de login por un fallo de actualizacion
+    }
+  }
+
+  async function installUpdateV2() {
+    if (!pendingUpdate) return;
+    setUpdateInstalling(true);
+    setUpdateDownloadedBytes(0);
+    setUpdateTotalBytes(null);
+    setUpdateSteps(makeInitialSteps());
+    localStorage.removeItem("update_crash_log");
+
+    const updateStep = (i: number, patch: Partial<InstallStep>) =>
+      setUpdateSteps((prev) => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
+    const addLog = (i: number, log: string) =>
+      setUpdateSteps((prev) => prev.map((s, idx) => idx === i ? { ...s, logs: [...s.logs, log] } : s));
+
+    // Paso 0: Backup
+    localStorage.setItem("update_crash_log", "Proceso interrumpido en: Crear copia de seguridad");
+    updateStep(0, { status: "running" });
+    try {
+      const tenantId = sessionContext.current()?.tenantId;
+      if (tenantId) {
+        addLog(0, "Iniciando copia de seguridad...");
+        await backupService.createBackup(tenantId);
+        addLog(0, "Copia de seguridad creada correctamente.");
+      } else {
+        addLog(0, "Sin sesion activa, se omite la copia de seguridad.");
+      }
+      updateStep(0, { status: "ok" });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addLog(0, `Error: ${msg}`);
+      localStorage.setItem("update_crash_log", `Fallo en Crear copia de seguridad: ${msg}`);
+      updateStep(0, { status: "error" });
+      setUpdateInstalling(false);
+      return;
+    }
+
+    // Paso 1: Descarga
+    localStorage.setItem("update_crash_log", "Proceso interrumpido en: Descargar actualizacion");
+    updateStep(1, { status: "running" });
+    addLog(1, "Iniciando descarga...");
+    try {
+      await tauriUpdaterService.download((progress) => {
+        if (progress.event === "started") {
+          setUpdateTotalBytes(progress.totalBytes);
+          addLog(1, `Descarga iniciada${progress.totalBytes ? ` (${(progress.totalBytes / 1024 / 1024).toFixed(1)} MB)` : ""}.`);
+        } else if (progress.event === "progress") {
+          setUpdateDownloadedBytes((prev) => prev + progress.downloadedBytes);
+        } else if (progress.event === "finished") {
+          addLog(1, "Descarga completada.");
+        }
+      });
+      updateStep(1, { status: "ok" });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addLog(1, `Error: ${msg}`);
+      localStorage.setItem("update_crash_log", `Fallo en Descargar actualizacion: ${msg}`);
+      updateStep(1, { status: "error" });
+      setUpdateInstalling(false);
+      return;
+    }
+
+    // Paso 2: Instalar
+    localStorage.setItem("update_crash_log", "Proceso interrumpido en: Instalar (NSIS activo)");
+    updateStep(2, { status: "running" });
+    addLog(2, "Ejecutando instalador...");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      await tauriUpdaterService.install();
+      localStorage.setItem("update_crash_log", "Proceso interrumpido en: Relanzar aplicacion");
+      updateStep(2, { status: "ok" });
+      addLog(2, "Instalacion completada.");
+      updateStep(3, { status: "running" });
+      addLog(3, "Relanzando aplicacion...");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await tauriUpdaterService.relaunch();
+      localStorage.removeItem("update_crash_log");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addLog(2, `Error: ${msg}`);
+      localStorage.setItem("update_crash_log", `Fallo en Instalar: ${msg}`);
+      updateStep(2, { status: "error" });
+      setUpdateInstalling(false);
+    }
+  }
+
   async function showMain(authenticatedUser: LocalUser) {
     const isDemo = authenticatedUser.role === "DEMO";
 
@@ -121,8 +221,7 @@ function App() {
     setUser(authenticatedUser);
     setScreen("main");
     if (!isDemo) {
-      const update = await updateService.checkForUpdate();
-      if (update) setPendingUpdate(update);
+      void checkForUpdateV2();
     }
   }
 
@@ -138,8 +237,44 @@ function App() {
 
   return <>{content}
     {recoveryCode ? <RecoveryCodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
-    {pendingUpdate ? <UpdateDialog update={pendingUpdate} onOmit={pendingUpdate.forced ? undefined : () => { setPendingUpdate(null); updateDecision.current?.(); updateDecision.current = null; }} onInstall={async () => { const tenantId = sessionContext.current()?.tenantId; if (tenantId) await backupService.createBackup(tenantId); await updateService.install(pendingUpdate); }} /> : null}
+    {pendingUpdate && !updateInstalling ? (
+      <UpdateBanner
+        version={pendingUpdate.version!}
+        releaseNotes={pendingUpdate.releaseNotes}
+        onInstall={() => void installUpdateV2()}
+        onDismiss={() => { setPendingUpdate(null); tauriUpdaterService.clearPending(); }}
+      />
+    ) : null}
+    {updateInstalling ? (
+      <UpdateStepsModal
+        version={pendingUpdate?.version ?? ""}
+        releaseNotes={pendingUpdate?.releaseNotes ?? null}
+        steps={updateSteps}
+        downloadedBytes={updateDownloadedBytes}
+        totalBytes={updateTotalBytes}
+        onClose={() => { setUpdateInstalling(false); setPendingUpdate(null); }}
+      />
+    ) : null}
   </>;
+}
+
+function UpdateBanner({ version, releaseNotes, onInstall, onDismiss }: { version: string; releaseNotes: string | null; onInstall: () => void; onDismiss: () => void }) {
+  return (
+    <Flex position="fixed" bottom="6" right="6" zIndex="toast" maxW="360px" w="full"
+      bg="white" borderWidth="1px" borderColor="purple.200" borderRadius="lg" boxShadow="lg" p="4" gap="3" direction="column">
+      <Flex justify="space-between" align="start" gap="2">
+        <Box>
+          <Text fontSize="sm" fontWeight="bold" color="#6366f1">Nueva version disponible: v{version}</Text>
+          {releaseNotes ? <Text fontSize="xs" color="gray.500" mt="0.5" overflow="hidden" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{releaseNotes}</Text> : null}
+        </Box>
+        <Button size="xs" variant="ghost" color="gray.400" onClick={onDismiss} flexShrink="0"><X size={14} /></Button>
+      </Flex>
+      <Flex gap="2">
+        <Button size="sm" colorPalette="purple" flex="1" onClick={onInstall}>Actualizar ahora</Button>
+        <Button size="sm" variant="outline" onClick={onDismiss}>Despues</Button>
+      </Flex>
+    </Flex>
+  );
 }
 
 function MigratingView({ progress, countdown }: { progress: MigrationProgress | null; countdown: number | null }) {

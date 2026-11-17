@@ -44,6 +44,11 @@
     Edita solo las notas de un release existente en GitHub. No recompila ni modifica
     assets. Requiere -Notes o -NotesFile. El release ya debe existir.
 
+.PARAMETER BuildOnly
+    Solo compila el proyecto con la clave de firma y deja los artefactos en
+    src-tauri\target\release\bundle\nsis\. No crea tag, release ni toca GitHub.
+    Util para verificar que el build funciona antes de publicar.
+
 .PARAMETER DryRun
     Ejecuta todas las validaciones y genera el JSON localmente pero NO crea tags,
     releases, commits ni modifica la rama remota.
@@ -57,6 +62,7 @@
     .\scripts\publish-release.ps1 -Version "1.9.0" -Channel stable -NotesFile ".\CHANGELOG.md" -SkipBuild
     .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -UpdateOnly
     .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -Notes "Nuevas notas" -NotesOnly
+    .\scripts\publish-release.ps1 -Version "1.9.0-beta.1" -Channel beta -BuildOnly
 #>
 
 [CmdletBinding()]
@@ -68,6 +74,7 @@ param(
     [switch]$SkipBuild,
     [switch]$UpdateOnly,
     [switch]$NotesOnly,
+    [switch]$BuildOnly,
     [switch]$DryRun,
     [string]$Repo
 )
@@ -183,6 +190,26 @@ if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
 Write-Ok "Variables de firma cargadas desde: $($envVars['TAURI_SIGNING_PRIVATE_KEY_PATH'])"
 
 # ---------------------------------------------------------------------------
+# MODO BuildOnly: compila y sale. No toca GitHub.
+# ---------------------------------------------------------------------------
+if ($BuildOnly) {
+    Write-Step "Modo BuildOnly -- compilando v$Version (sin GitHub)"
+    Set-Location $projectRoot
+    $ErrorActionPreference = "Continue"
+    npm run tauri build 2>&1
+    $buildEc = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($buildEc -ne 0) { Write-Fail "La compilacion fallo (exit $buildEc)." }
+    $bundleDir = Join-Path $projectRoot "src-tauri\target\release\bundle\nsis"
+    $exeFile   = Get-ChildItem $bundleDir -Filter "*.exe" | Where-Object { $_.Name -notlike "*-setup.exe" -or $_.Name -like "*-setup.exe" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $sigFile   = Get-ChildItem $bundleDir -Filter "*.exe.sig" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Write-Ok "Build completado."
+    if ($exeFile) { Write-Ok "EXE: $($exeFile.FullName)" }
+    if ($sigFile) { Write-Ok "SIG: $($sigFile.FullName)" }
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
 # 1. PREFLIGHT
 # ---------------------------------------------------------------------------
 Write-Step "Preflight"
@@ -282,6 +309,9 @@ if ($NotesOnly) {
 # ---------------------------------------------------------------------------
 # 3. VERIFICAR COINCIDENCIA DE VERSION EN PROYECTO
 # ---------------------------------------------------------------------------
+# UpdateOnly solo regenera assets de un release existente -- no recompila,
+# por lo que los archivos locales pueden estar en otra version. Se omite la validacion.
+if (-not $UpdateOnly) {
 Write-Step "Verificando version en Cargo.toml y tauri.conf.json"
 
 # Cargo.toml
@@ -303,6 +333,7 @@ if ($tauriVersion -ne $Version) {
     Write-Fail "Version en tauri.conf.json ('$tauriVersion') != Version indicada ('$Version'). Actualiza tauri.conf.json antes de publicar."
 }
 Write-Ok "Versiones sincronizadas: Cargo=$cargoVersion, tauri.conf=$tauriVersion"
+} # fin if (-not $UpdateOnly)
 
 # ---------------------------------------------------------------------------
 # 4. TAG Y RELEASE DUPLICADO
@@ -411,7 +442,7 @@ $manifestDryRun = [ordered]@{
 
 if ($DryRun) {
     Write-Step "DryRun: manifiesto generado localmente (sin push ni release)"
-    $dryJson = $manifestDryRun | ConvertTo-Json -Depth 10
+    $dryJson = $manifestDryRun | ConvertTo-Json -Depth 10 -Compress
     Write-Host $dryJson
     $dryPath = Join-Path $projectRoot "scripts\${manifestFileName}.dryrun"
     $dryJson | Out-File -FilePath $dryPath -Encoding UTF8
@@ -474,8 +505,12 @@ Remove-Item $tempExe, $tempSig -ErrorAction SilentlyContinue
 $releaseAssets = gh release view "v$Version" --repo $Repo --json assets | ConvertFrom-Json
 $exeAsset = $releaseAssets.assets | Where-Object { $_.name -eq $githubAssetName }
 if (-not $exeAsset) { Write-Fail "No se encontro el asset '$githubAssetName' en el release tras el upload." }
-$exeAssetUrl = $exeAsset.url
-Write-Ok "URL confirmada del exe: $exeAssetUrl"
+
+# Extraer el asset ID numerico desde apiUrl (ej: .../releases/assets/757865100)
+$assetIdNumeric = ($exeAsset.apiUrl -split '/')[-1]
+# Usar proxy de MadPost-Dash para evitar problemas de red con github.com/releases/download
+$exeAssetUrl = "https://madpost.bizzify.lat/api/download?asset_id=$assetIdNumeric&repo=$([Uri]::EscapeDataString($Repo))&name=$([Uri]::EscapeDataString($githubAssetName))"
+Write-Ok "URL proxy del exe: $exeAssetUrl"
 
 # ---------------------------------------------------------------------------
 # 8. GENERAR MANIFIESTO CON URL REAL
@@ -493,7 +528,7 @@ $manifest = [ordered]@{
         }
     }
 }
-$manifestJson = $manifest | ConvertTo-Json -Depth 10
+$manifestJson = $manifest | ConvertTo-Json -Depth 10 -Compress
 Write-Ok "Manifiesto generado (firma real del .sig incluida)"
 
 # ---------------------------------------------------------------------------
@@ -504,7 +539,7 @@ Write-Ok "Manifiesto generado (firma real del .sig incluida)"
 Write-Step "Subiendo $manifestFileName como asset del release"
 
 $tempManifest = Join-Path ([System.IO.Path]::GetTempPath()) $manifestFileName
-$manifestJson | Out-File -FilePath $tempManifest -Encoding UTF8 -NoNewline
+[System.IO.File]::WriteAllText($tempManifest, $manifestJson, [System.Text.UTF8Encoding]::new($false))
 
 $ErrorActionPreference = "Continue"
 gh release upload "v$Version" $tempManifest --repo $Repo
@@ -594,7 +629,7 @@ No modificar manualmente. Actualizado por `scripts/publish-release.ps1`.
     }
 
     # Escribir manifiesto del canal actual
-    $manifestJson | Out-File $manifestFileName -Encoding UTF8 -NoNewline
+    [System.IO.File]::WriteAllText((Resolve-Path $manifestFileName).Path, $manifestJson, [System.Text.UTF8Encoding]::new($false))
     git add $manifestFileName
     git commit -m "release($Channel): v$Version"
     $ErrorActionPreference = "Continue"

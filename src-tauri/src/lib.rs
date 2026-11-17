@@ -5,8 +5,12 @@ mod mobile_api;
 mod update_installer;
 use serde::Serialize;
 use std::{env, fs, process::Command};
-use tauri::Manager;
+use std::sync::Mutex;
+use tauri::{Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
+
+// Bytes del instalador descargado, listos para instalar
+struct DownloadedUpdate(Mutex<Option<Vec<u8>>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,7 +21,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, check_for_update, list_releases, install_update, check_for_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
+        .manage(DownloadedUpdate(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, check_for_update, list_releases, install_update, check_for_update_v2, download_update, install_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -147,6 +152,84 @@ async fn check_for_update_v2(app: tauri::AppHandle, channel: String) -> Result<U
         }),
         Err(e) => Err(format!("Error al verificar actualizaciones: {e}")),
     }
+}
+
+#[tauri::command]
+async fn download_update(app: tauri::AppHandle, channel: String) -> Result<(), String> {
+    let repo = option_env!("MADPOST_GITHUB_REPO").unwrap_or("");
+    if repo.is_empty() { return Err("MADPOST_GITHUB_REPO no configurado.".to_string()); }
+
+    let manifest_name = match channel.as_str() { "beta" => "beta-latest.json", _ => "stable-latest.json" };
+    let endpoint = format!("https://raw.githubusercontent.com/{repo}/releases-manifest/{manifest_name}");
+
+    let mut builder = app.updater_builder()
+        .endpoints(vec![endpoint.parse().map_err(|e| format!("URL invalida: {e}"))?])
+        .map_err(|e| format!("No se pudo configurar endpoint: {e}"))?;
+
+    if let Some(token) = option_env!("MADPOST_GITHUB_TOKEN").filter(|t| !t.is_empty()) {
+        builder = builder.header("Authorization", format!("Bearer {token}"))
+            .map_err(|e| format!("Header auth: {e}"))?;
+    }
+
+    let updater = builder.build().map_err(|e| format!("No se pudo construir updater: {e}"))?;
+
+    let update = updater.check().await
+        .map_err(|e| format!("Error verificando: {e}"))?
+        .ok_or_else(|| "No hay actualizacion disponible.".to_string())?;
+
+    let _ = app.emit("update-progress", serde_json::json!({ "event": "started", "totalBytes": null }));
+
+    let app_chunk = app.clone();
+    let bytes = update.download(
+        move |chunk_len, content_length| {
+            let _ = app_chunk.emit("update-progress", serde_json::json!({
+                "event": "progress",
+                "downloadedBytes": chunk_len,
+                "totalBytes": content_length
+            }));
+        },
+        || {},
+    ).await.map_err(|e| format!("Error descargando: {e}"))?;
+
+    let _ = app.emit("update-progress", serde_json::json!({ "event": "finished" }));
+
+    // Guardar bytes para que install_update_v2 los use
+    let state = app.state::<DownloadedUpdate>();
+    *state.0.lock().unwrap() = Some(bytes);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn install_update_v2(app: tauri::AppHandle, channel: String) -> Result<(), String> {
+    let repo = option_env!("MADPOST_GITHUB_REPO").unwrap_or("");
+    if repo.is_empty() { return Err("MADPOST_GITHUB_REPO no configurado.".to_string()); }
+
+    let manifest_name = match channel.as_str() { "beta" => "beta-latest.json", _ => "stable-latest.json" };
+    let endpoint = format!("https://raw.githubusercontent.com/{repo}/releases-manifest/{manifest_name}");
+
+    let mut builder = app.updater_builder()
+        .endpoints(vec![endpoint.parse().map_err(|e| format!("URL invalida: {e}"))?])
+        .map_err(|e| format!("No se pudo configurar endpoint: {e}"))?;
+
+    if let Some(token) = option_env!("MADPOST_GITHUB_TOKEN").filter(|t| !t.is_empty()) {
+        builder = builder.header("Authorization", format!("Bearer {token}"))
+            .map_err(|e| format!("Header auth: {e}"))?;
+    }
+
+    let updater = builder.build().map_err(|e| format!("No se pudo construir updater: {e}"))?;
+
+    let update = updater.check().await
+        .map_err(|e| format!("Error verificando: {e}"))?
+        .ok_or_else(|| "No hay actualizacion disponible.".to_string())?;
+
+    let state = app.state::<DownloadedUpdate>();
+    let bytes = state.0.lock().unwrap().take()
+        .ok_or_else(|| "No hay descarga lista. Ejecuta download_update primero.".to_string())?;
+
+    update.install(bytes).map_err(|e| format!("Error instalando: {e}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
