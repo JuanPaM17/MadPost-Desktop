@@ -1,11 +1,11 @@
 ﻿{
-    "version":  "1.9.0-beta.1",
-    "notes":  "Vendedores ven  todas las cajas y todo el historial de ventas. El resumen de inventario muestra solo el nombre   del insumo.",
-    "pub_date":  "2026-11-17T05:24:34Z",
+    "version":  "1.9.0-beta.2",
+    "notes":  "Beta 2: prueba del   sistema de actualizaciones automaticas",
+    "pub_date":  "2026-11-17T05:34:24Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/JuanPaM17/MadPost-Desktop/releases/download/v1.9.0-beta.1/MadPost.Desktop_1.9.0-beta.1_x64-setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVROWd2cFB0ZlRPSmlxN1lQOFZNc1pnMHpUSG95Z0F0ZVhSMTdzdVg1L3YzZTdDcnVSNm1QdTF6blhXWDZGSnJYTytGeGV0WWRCN1p1REtTWEcwSGJENkNZSDBNTlAybmd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODkzMDc0CWZpbGU6TWFkUG9zdCBEZXNrdG9wXzEuOS4wLWJldGEuMV94NjQtc2V0dXAuZXhlCmh5dWwyS29sN0FzZy9SZWQxSG1zU2NqTTBzTzN5K2E4dlZleDVLS3ppenN5dkZ6K3BYNE1EaXVXRk5OdkN3QTJLWllQbzhPRnArT3pKajlkQno2cUFnPT0K"
+                                             "url":  "https://github.com/JuanPaM17/MadPost-Desktop/releases/download/v1.9.0-beta.2/MadPost.Desktop_1.9.0-beta.2_x64-setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVROWd2cFB0ZlRPSnZsSXdBUXFNdmZFOXdBR3BLLzdYejJNaU9hVHRNZmhPeXpVT0lwZVR3MUgyRDRqamd5QkluZjQvdUdXRWx5ZlhJSFpMWnAyRG4ybm5pdFZSajVmeFFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODkzNjY0CWZpbGU6TWFkUG9zdCBEZXNrdG9wXzEuOS4wLWJldGEuMl94NjQtc2V0dXAuZXhlCjBxNWp0dnR6bkRhdUdKSm5oRlpUVWFNVGNmYUtRb3E3a0srazVnUjBTL1Y2NThFZHUxUzV5YmdyODRaRmptQVp3OTVrTDBSbVpXVGxmZjlqT0VBNER3PT0K"
                                          }
                   }
 }
