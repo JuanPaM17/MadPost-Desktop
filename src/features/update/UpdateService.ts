@@ -1,43 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { runtimeLogger } from "../runtime/RuntimeLogger";
 import { licenseService } from "../license/LicenseService";
 
 export const APP_VERSION = __MADPOST_VERSION__;
-export type UpdateInfo = { version: string; releaseUrl: string; downloadUrl: string | null; releaseNotes: string; forced: boolean };
 export type ReleaseEntry = { version: string; date: string; notes: string };
-export type UpdateCheckResult = { state: "upToDate" | "available" | "unavailable"; message: string; update: UpdateInfo | null };
 
-// Siempre usa tauri-plugin-updater (v2). El mecanismo legacy queda como fallback
-// en UpdateService pero no se invoca desde la UI. Para revertir temporalmente,
-// cambiar el valor en vite.config.ts a false y recompilar.
-declare const __USE_TAURI_UPDATER__: boolean;
-export const USE_TAURI_UPDATER: boolean = __USE_TAURI_UPDATER__;
+declare const __MADPOST_VERSION__: string;
 
 class UpdateService {
-  async checkForUpdate(): Promise<UpdateInfo | null> { return (await this.check()).update; }
-
-  async check(): Promise<UpdateCheckResult> {
-    try {
-      const prereleaseAccess = await licenseService.hasPrereleaseAccess();
-      return await invoke<UpdateCheckResult>("check_for_update", { prereleaseAccess });
-    } catch (error) {
-      runtimeLogger.info("UpdateService", "check_for_update invoke failed", { reason: error instanceof Error ? error.message : String(error) });
-      return { state: "unavailable", message: "No pudimos conectarnos para buscar actualizaciones. Puedes intentarlo de nuevo mas tarde.", update: null };
-    }
-  }
-
   async listReleases(): Promise<ReleaseEntry[]> {
     try {
       const prereleaseAccess = await licenseService.hasPrereleaseAccess();
       return await invoke<ReleaseEntry[]>("list_releases", { prereleaseAccess });
     } catch { return []; }
-  }
-
-  async install(update: UpdateInfo) {
-    if (!update.downloadUrl) throw new Error("Esta actualizacion aun no tiene un instalador disponible.");
-    const result = await invoke<{ started: boolean; message: string }>("install_update", { downloadUrl: update.downloadUrl });
-    if (!result.started) throw new Error(result.message);
-    runtimeLogger.info("UpdateService", result.message, { version: update.version });
   }
 }
 

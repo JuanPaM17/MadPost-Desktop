@@ -2,12 +2,12 @@ mod api;
 mod backup_cli;
 mod r2_native;
 mod mobile_api;
-mod update_installer;
 use serde::Serialize;
 use std::{env, fs, process::Command};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
+use reqwest::blocking::Client as BlockingClient;
 
 // Bytes del instalador descargado, listos para instalar
 struct DownloadedUpdate(Mutex<Option<Vec<u8>>>);
@@ -22,7 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
         .manage(DownloadedUpdate(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, check_for_update, list_releases, install_update, check_for_update_v2, download_update, install_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, list_releases, check_for_update_v2, download_update, install_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -52,23 +52,45 @@ fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_
 #[tauri::command]
 fn unpublish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::NativeResult { mobile_api::unpublish_mdns(&state) }
 
-#[tauri::command]
-async fn check_for_update(prerelease_access: bool) -> update_installer::UpdateCheckResult {
-    tauri::async_runtime::spawn_blocking(move || update_installer::check_update(prerelease_access)).await
-        .unwrap_or_else(|_| update_installer::UpdateCheckResult {
-            state: "unavailable".into(),
-            message: "No pudimos conectarnos para buscar actualizaciones.".into(),
-            update: None,
-        })
-}
-#[tauri::command]
-async fn list_releases(prerelease_access: bool) -> Vec<update_installer::ReleaseEntry> {
-    tauri::async_runtime::spawn_blocking(move || update_installer::list_releases(prerelease_access)).await.unwrap_or_default()
-}
+#[derive(Serialize)]
+pub struct ReleaseEntry { pub version: String, pub date: String, pub notes: String }
 
 #[tauri::command]
-fn install_update(app: tauri::AppHandle, download_url: String) -> update_installer::UpdateInstallResult {
-    update_installer::install_and_exit(app, download_url)
+async fn list_releases(prerelease_access: bool) -> Vec<ReleaseEntry> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = match option_env!("MADPOST_GITHUB_REPO").filter(|r| !r.is_empty()) {
+            Some(r) => r,
+            None => return vec![],
+        };
+        let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
+        let client = match BlockingClient::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build() { Ok(c) => c, Err(_) => return vec![] };
+        let mut req = client.get(&url)
+            .header("User-Agent", "MadPost-Desktop")
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(token) = option_env!("MADPOST_GITHUB_TOKEN").filter(|t| !t.is_empty()) {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        let releases: serde_json::Value = match req.send()
+            .and_then(|r| r.bytes())
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
+            Ok(v) => v, Err(_) => return vec![],
+        };
+        releases.as_array().unwrap_or(&vec![]).iter().filter_map(|r| {
+            if r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false) { return None; }
+            let is_prerelease = r.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_prerelease && !prerelease_access { return None; }
+            let tag = r.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").trim_start_matches('v').to_string();
+            let version = if is_prerelease { format!("{tag} (Pre-release)") } else { tag };
+            let date = r.get("published_at").and_then(|v| v.as_str())
+                .map(|s| s.get(..10).unwrap_or(s).to_string()).unwrap_or_default();
+            let notes = r.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            Some(ReleaseEntry { version, date, notes })
+        }).collect()
+    }).await.unwrap_or_default()
 }
 
 /// Resultado del check con el plugin oficial de Tauri Updater v2.
