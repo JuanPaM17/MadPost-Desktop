@@ -104,9 +104,23 @@ fn open_db(db_path: &str) -> Result<rusqlite::Connection, String> {
 fn new_uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     let c = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{:032x}{:016x}", t, c)
+    // Construir 16 bytes: 8 del timestamp, 8 del contador
+    let hi = t;
+    let lo = c;
+    // Aplicar version 4 (bits 12-15 del byte 6 = 0100) y variante RFC 4122 (bits 6-7 del byte 8 = 10)
+    let b6 = (((hi >> 8) & 0x0fff) | 0x4000) as u16;
+    let b8 = (((lo >> 48) & 0x3fff) | 0x8000) as u16;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:04x}{:08x}",
+        (hi >> 32) as u32,
+        (hi >> 16) as u16,
+        b6,
+        b8,
+        (lo >> 32) as u16,
+        lo as u32,
+    )
 }
 
 fn now_iso() -> String {

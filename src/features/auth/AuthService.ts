@@ -69,7 +69,10 @@ class AuthService {
     await userRepository.updatePassword(userId, passwordHash);
     const database = await databaseManager.database();
     const users = await database.select<LocalUser[]>("SELECT id,tenant_id,username,password_hash,display_name,role,active FROM users WHERE id=$1", [userId]);
-    if (users[0]) await syncQueueRepository.enqueue("users", userId, "UPDATE", userPayload(users[0]));
+    if (users[0]) {
+      await syncQueueRepository.enqueue("users", userId, "UPDATE", userPayload(users[0]));
+      await auditService.log("CAMBIAR_PASSWORD", "USUARIOS", `Contrasena cambiada por admin para: ${users[0].username}`, userId);
+    }
   }
 
   async updateProfile(user: LocalUser, username: string, displayName: string, password: string | null) {

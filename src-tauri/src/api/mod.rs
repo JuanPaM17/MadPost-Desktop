@@ -14,6 +14,7 @@ use axum::{
     Json,
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 
@@ -73,22 +74,47 @@ pub async fn auth_middleware(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_string);
 
-    match token.and_then(|t| verify_jwt(&t, &context.jwt_secret)) {
-        Some(claims) => {
-            req.extensions_mut().insert(AuthUser {
-                user_id: claims.sub,
-                username: claims.username,
-                role: claims.role,
-                tenant_id: claims.tenant_id,
-            });
-            next.run(req).await.into_response()
-        }
-        None => (
+    let claims = match token.and_then(|t| verify_jwt(&t, &context.jwt_secret)) {
+        Some(c) => c,
+        None => return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Token invalido o expirado." })),
-        )
-            .into_response(),
+        ).into_response(),
+    };
+
+    // Si viene X-Device-Id, verificar que el dispositivo este aprobado
+    if let Some(device_id) = req.headers().get("x-device-id").and_then(|v| v.to_str().ok()).map(str::to_string) {
+        let db_path = context.db_path.clone();
+        let tenant_id = claims.tenant_id.clone();
+        let status = tokio::task::spawn_blocking(move || {
+            let conn = rusqlite::Connection::open(&db_path).ok()?;
+            conn.query_row(
+                "SELECT status FROM mobile_devices WHERE id=?1 AND tenant_id=?2 LIMIT 1",
+                rusqlite::params![device_id, tenant_id],
+                |r| r.get::<_, String>(0),
+            ).optional().ok()?
+        }).await.unwrap_or(None);
+
+        match status.as_deref() {
+            Some("approved") => {}
+            Some("revoked") => return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "Dispositivo revocado." })),
+            ).into_response(),
+            _ => return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Dispositivo no autorizado." })),
+            ).into_response(),
+        }
     }
+
+    req.extensions_mut().insert(AuthUser {
+        user_id: claims.sub,
+        username: claims.username,
+        role: claims.role,
+        tenant_id: claims.tenant_id,
+    });
+    next.run(req).await.into_response()
 }
 
 // ---------------------------------------------------------------------------

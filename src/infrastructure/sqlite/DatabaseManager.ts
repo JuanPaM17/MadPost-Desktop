@@ -185,6 +185,15 @@ const migrations = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, ip)
   )`,
+  `CREATE TABLE IF NOT EXISTS mobile_devices (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    alias TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'revoked')),
+    last_ip TEXT,
+    last_seen_at TEXT,
+    registered_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS user_quick_links (
     user_id TEXT NOT NULL,
     view_id TEXT NOT NULL,

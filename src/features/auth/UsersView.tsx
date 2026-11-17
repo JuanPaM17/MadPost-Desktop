@@ -12,7 +12,7 @@ import { rolesService, type Role } from "../roles/RolesService";
 type Editor = { user: LocalUser | null; username: string; name: string; password: string; role: string };
 
 export function UsersView({ onCurrentUserUpdated, onUsersChanged }: { onCurrentUserUpdated: (user: LocalUser) => void; onUsersChanged?: () => void }) {
-  const session = sessionContext.current(); const isSuperAdmin = session?.user.role === "SUPERADMIN"; const canManage = sessionContext.hasPermission("users.manage"); const [users, setUsers] = useState<LocalUser[]>([]); const [roles, setRoles] = useState<Role[]>([]); const [query, setQuery] = useState(""); const [roleFilter, setRoleFilter] = useState("ALL"); const [statusFilter, setStatusFilter] = useState("ALL"); const [filtersOpen, setFiltersOpen] = useState(false); const [editor, setEditor] = useState<Editor | null>(null); const [recoveryCode, setRecoveryCode] = useState<string | null>(null); const [confirm, setConfirm] = useState<{ user: LocalUser; mode: "delete" | "deactivate" } | null>(null); const [pageSize, setPageSize] = useState(10); const [page, setPage] = useState(1); const tenantId = session?.tenantId ?? "";
+  const session = sessionContext.current(); const isSuperAdmin = session?.user.role === "SUPERADMIN"; const canManage = sessionContext.hasPermission("users.manage"); const isAdmin = isSuperAdmin || session?.user.role === "ADMIN"; const [users, setUsers] = useState<LocalUser[]>([]); const [roles, setRoles] = useState<Role[]>([]); const [query, setQuery] = useState(""); const [roleFilter, setRoleFilter] = useState("ALL"); const [statusFilter, setStatusFilter] = useState("ALL"); const [filtersOpen, setFiltersOpen] = useState(false); const [editor, setEditor] = useState<Editor | null>(null); const [resetTarget, setResetTarget] = useState<LocalUser | null>(null); const [recoveryCode, setRecoveryCode] = useState<string | null>(null); const [confirm, setConfirm] = useState<{ user: LocalUser; mode: "delete" | "deactivate" } | null>(null); const [pageSize, setPageSize] = useState(10); const [page, setPage] = useState(1); const tenantId = session?.tenantId ?? "";
   const refresh = useCallback(async () => { try { const [userList, roleList] = await Promise.all([authService.listUsers(tenantId), rolesService.listRoles(tenantId)]); setUsers(userList); setRoles(roleList); } catch { notify.error("No fue posible cargar los usuarios."); } }, [tenantId]);
   useEffect(() => { void refresh(); }, [refresh]);
   const filtered = useMemo(() => users.filter((user) =>
@@ -60,6 +60,7 @@ export function UsersView({ onCurrentUserUpdated, onUsersChanged }: { onCurrentU
               {canManage ? <Table.Cell textAlign="right"><Flex justify="end" gap="2" wrap="wrap">
                 <Button size="xs" variant="outline" onClick={() => setEditor({ user, username: user.username, name: user.display_name ?? "", password: "", role: user.role })}><Pencil size={14} />Editar</Button>
                 <Button size="xs" variant="outline" onClick={() => void generateCode(user)}><KeyRound size={14} />Codigo acceso</Button>
+                {isAdmin && user.id !== session?.user.id ? <Button size="xs" variant="outline" colorPalette="orange" onClick={() => setResetTarget(user)}><KeyRound size={14} />Cambiar clave</Button> : null}
                 <Button size="xs" variant="outline" colorPalette={user.active ? "red" : "gray"} disabled={user.id === session?.user.id} onClick={() => void toggle(user)}>{user.active ? "Desactivar" : "Activar"}</Button>
                 <Button size="xs" variant="outline" colorPalette="red" onClick={() => void requestDelete(user)}><Trash2 size={14} />Eliminar</Button>
               </Flex></Table.Cell> : null}
@@ -74,6 +75,7 @@ export function UsersView({ onCurrentUserUpdated, onUsersChanged }: { onCurrentU
     {editor ? <UserEditor editor={editor} isSelf={editor.user?.id === session?.user.id} isSuperAdmin={isSuperAdmin} roles={roles} onChange={setEditor} onClose={() => setEditor(null)} onSave={() => void saveEditor()} /> : null}
     {confirm ? <ConfirmDialog title={confirmTitle} message={confirmMessage} onClose={() => setConfirm(null)} onConfirm={() => void confirmAction()} /> : null}
     {recoveryCode ? <CodeDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} /> : null}
+    {resetTarget ? <ResetPasswordDialog user={resetTarget} onClose={() => setResetTarget(null)} onSaved={() => { notify.success(`Contrasena actualizada para ${resetTarget.username}.`); setResetTarget(null); }} /> : null}
   </Box>;
 }
 
@@ -114,6 +116,41 @@ function UserFiltersDialog({ roles, isSuperAdmin, roleFilter, statusFilter, onCl
     </Flex>
   </Modal>;
 }
+function ResetPasswordDialog({ user, onClose, onSaved }: { user: LocalUser; onClose: () => void; onSaved: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  async function handleSave() {
+    if (password.length < 4) { setError("La contrasena debe tener al menos 4 caracteres."); return; }
+    if (password !== confirm) { setError("Las contrasenas no coinciden."); return; }
+    setError(""); setLoading(true);
+    try { await authService.resetPassword(user.id, password); onSaved(); }
+    catch (e) { setError(e instanceof Error ? e.message : "No fue posible cambiar la contrasena."); }
+    finally { setLoading(false); }
+  }
+  return <Modal>
+    <Flex justify="space-between" align="center" mb="5">
+      <Heading size="md">Cambiar contrasena</Heading>
+      <Button size="sm" variant="ghost" onClick={onClose}><X size={17} /></Button>
+    </Flex>
+    <Text fontSize="sm" color="gray.500" mb="5">Cambiando la contrasena de <Text as="span" fontWeight="semibold" color="gray.700">{user.username}</Text>. No se requiere la contrasena actual.</Text>
+    <Stack gap="4">
+      <Field label="Nueva contrasena">
+        <Input autoFocus type="password" placeholder="Minimo 4 caracteres" value={password} onChange={(e) => { setPassword(e.target.value); setError(""); }} />
+      </Field>
+      <Field label="Confirmar contrasena">
+        <Input type="password" placeholder="Repite la contrasena" value={confirm} onChange={(e) => { setConfirm(e.target.value); setError(""); }} onKeyDown={(e) => { if (e.key === "Enter") void handleSave(); }} />
+      </Field>
+      {error ? <Text fontSize="sm" color="red.500">{error}</Text> : null}
+      <Flex justify="end" gap="3" mt="1">
+        <Button variant="outline" onClick={onClose}>Cancelar</Button>
+        <Button colorPalette="orange" loading={loading} onClick={() => void handleSave()}><Check size={17} />Guardar</Button>
+      </Flex>
+    </Stack>
+  </Modal>;
+}
+
 function Modal({ children, maxW = "460px" }: { children: React.ReactNode; maxW?: string }) { return <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="5"><Box w="full" maxW={maxW} bg="white" borderRadius="md" p="6" boxShadow="2xl">{children}</Box></Flex>; }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <Box><Text mb="2" fontWeight="semibold" fontSize="sm">{label}</Text>{children}</Box>; }
 function roleLabel(role: string) { return role === "ADMIN" ? "Administrador" : role === "SELLER" ? "Vendedor" : role === "SUPERADMIN" ? "Super Admin" : role; }

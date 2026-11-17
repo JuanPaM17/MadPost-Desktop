@@ -142,7 +142,17 @@ pub fn stop_api(state: &MobileRuntimeState) -> NativeResult {
 }
 
 pub fn api_status(state: &MobileRuntimeState) -> MobileApiStatus {
-    let active = state.api.lock().map(|a| a.is_some()).unwrap_or(false);
+    let handle_exists = state.api.lock().map(|a| a.is_some()).unwrap_or(false);
+    // Solo hacer TCP probe si el handle existe (evita probes innecesarios cuando esta detenido)
+    let tcp_ok = handle_exists && std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], API_PORT)),
+        std::time::Duration::from_millis(500),
+    ).is_ok();
+    let active = handle_exists && tcp_ok;
+    // Si el handle existe pero TCP falla -> el server cayo, limpiar para poder reiniciar
+    if handle_exists && !tcp_ok {
+        if let Ok(mut api) = state.api.lock() { *api = None; }
+    }
     let mut clients = state.clients.lock()
         .map(|c| c.values().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
