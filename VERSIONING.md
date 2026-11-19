@@ -340,6 +340,25 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost Desktop_X
 
 ## Historial de versiones
 
+### v1.9.0 — Flujo de pedidos mas rapido, administracion de usuarios y mejoras generales
+
+**Nuevo:**
+- Los administradores ahora pueden cambiar la contrasena de cualquier usuario directamente desde la pantalla de usuarios, sin necesidad de que el usuario lo haga por su cuenta.
+- Al agregar un producto a una mesa, todas las opciones de personalizacion (insumos, salsas y adiciones) ahora aparecen juntas en una sola pantalla, en lugar de abrirse una por una. Mas rapido y directo.
+- El titulo y el boton de cobrar en la pantalla de cobro ahora se mantienen fijos aunque el contenido se desplace. Siempre visibles, sin necesidad de hacer scroll.
+- El editor SQL integrado ahora permite eliminar y editar registros directamente desde los resultados: boton de eliminar en cada fila, y doble clic en cualquier celda para editarla.
+
+**Mejorado:**
+- Los vendedores ahora pueden ver el historial de cajas y el historial de pedidos completo, sin importar quien haya abierto la caja.
+- El resumen de consumo en el historial de inventario ya no muestra el nombre del producto entre parentesis junto al insumo.
+- Se corrigio un problema donde el buscador de productos quedaba pegado al ver una factura desde el historial del detalle de una mesa.
+- El buscador de adiciones ahora aparece correctamente al personalizar combos.
+- El buscador de productos ahora encuentra resultados por las opciones del producto (por ejemplo, escribir el nombre de una variante).
+- Se corrigio el enfoque automatico en el campo de busqueda al entrar a la pantalla de ventas.
+- El sistema de actualizaciones fue mejorado internamente para mayor estabilidad y velocidad.
+
+---
+
 ### v1.9.0-beta.1 (Pre-release)
 
 **Corregido:**

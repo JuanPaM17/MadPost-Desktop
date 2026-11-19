@@ -35,6 +35,7 @@ pub fn router() -> Router<ApiContext> {
         .route("/api/v1/tables/{id}/order/comandas/{comanda_id}/reprint", post(reprint_comanda))
         .route("/api/v1/tables/{id}/order/receipts", get(list_receipts))
         .route("/api/v1/tables/{id}/order/receipts/{sale_id}/print", post(print_receipt))
+        .route("/api/v1/tables/{id}/history", get(get_table_history))
 }
 
 // ---------------------------------------------------------------------------
@@ -162,10 +163,10 @@ fn db_clients(conn: &Connection, order_id: &str) -> DbResult<Vec<(String, Option
     rows
 }
 
-fn db_items_for_order(conn: &Connection, order_id: &str) -> DbResult<Vec<(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>)>> {
-    // id, product_id, product_name, quantity, unit_price, subtotal, notes, selected_option, combo_id, table_order_client_id
+fn db_items_for_order(conn: &Connection, order_id: &str) -> DbResult<Vec<(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<f64>)>> {
+    // id, product_id, product_name, quantity, unit_price, subtotal, notes, selected_option, combo_id, table_order_client_id, combo_table_order_item_id, original_unit_price
     let mut stmt = conn.prepare(
-        "SELECT i.id, i.product_id, i.product_name, i.quantity, i.unit_price, i.subtotal, i.notes, i.selected_option, i.combo_id, i.table_order_client_id
+        "SELECT i.id, i.product_id, i.product_name, i.quantity, i.unit_price, i.subtotal, i.notes, i.selected_option, i.combo_id, i.table_order_client_id, i.combo_table_order_item_id, i.original_unit_price
          FROM table_order_items i
          WHERE i.table_order_id=?1
            AND (i.table_order_client_id IS NULL OR i.table_order_client_id NOT IN (
@@ -173,9 +174,9 @@ fn db_items_for_order(conn: &Connection, order_id: &str) -> DbResult<Vec<(String
            ))
          ORDER BY i.rowid ASC"
     ).map_err(|e| e.to_string())?;
-    let rows: DbResult<Vec<(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>)>> =
+    let rows: DbResult<Vec<(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<f64>)>> =
         stmt.query_map(rusqlite::params![order_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?))
         }).map_err(|e| e.to_string())?.map(|r| r.map_err(|e| e.to_string())).collect();
     rows
 }
@@ -200,9 +201,48 @@ fn db_item_sauces(conn: &Connection, item_id: &str) -> DbResult<Vec<(Option<Stri
     rows
 }
 
-fn build_item_json(conn: &Connection, item: &(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>)) -> DbResult<Value> {
+fn build_item_json(conn: &Connection, item: &(String, Option<String>, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<f64>)) -> DbResult<Value> {
     let additions = db_item_additions(conn, &item.0)?;
     let sauces = db_item_sauces(conn, &item.0)?;
+    let has_discount = item.11.map(|op| (op - item.4).abs() > 0.001).unwrap_or(false);
+
+    // Capacidades del producto (aplica a raíz e hijos de combo por igual)
+    let product_id = item.1.as_deref().unwrap_or("");
+    let (show_additions, show_sauces) = if product_id.is_empty() {
+        (false, false)
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(c.show_additions,0), COALESCE(c.show_sauces,0) \
+             FROM products p LEFT JOIN categories c ON c.id=p.category_id \
+             WHERE p.id=?1",
+            rusqlite::params![product_id],
+            |r| Ok((r.get::<_, i64>(0)? != 0, r.get::<_, i64>(1)? != 0)),
+        ).unwrap_or((false, false))
+    };
+
+    let options: Vec<String> = if product_id.is_empty() {
+        vec![]
+    } else {
+        let mut ostmt = conn.prepare(
+            "SELECT name FROM product_options WHERE product_id=?1 AND COALESCE(active,1)=1 ORDER BY sort_order, name COLLATE NOCASE"
+        ).map_err(|e| e.to_string())?;
+        let opts: Vec<String> = ostmt.query_map(rusqlite::params![product_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        opts
+    };
+
+    let has_ask_supplies: bool = if product_id.is_empty() {
+        false
+    } else {
+        conn.query_row(
+            "SELECT COUNT(*) FROM product_supplies WHERE product_id=?1 AND deduct_mode='ask'",
+            rusqlite::params![product_id],
+            |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0
+    };
+
     Ok(serde_json::json!({
         "id": item.0,
         "productId": item.1.clone().unwrap_or_default(),
@@ -214,6 +254,15 @@ fn build_item_json(conn: &Connection, item: &(String, Option<String>, String, f6
         "selectedOption": item.7.clone().unwrap_or_default(),
         "comboId": item.8.clone().unwrap_or_default(),
         "clientId": item.9.clone().unwrap_or_default(),
+        "comboParentItemId": item.10.clone().unwrap_or_default(),
+        "originalUnitPrice": item.11,
+        "hasDiscount": has_discount,
+        "productCapabilities": {
+            "options": options,
+            "showAdditions": show_additions,
+            "showSauces": show_sauces,
+            "hasAskSupplies": has_ask_supplies,
+        },
         "additions": additions.iter().map(|(aid, aname, price, qty)| serde_json::json!({
             "additionId": aid.clone().unwrap_or_default(),
             "additionName": aname,
@@ -243,11 +292,21 @@ fn build_order_json(conn: &Connection, order_id: &str, table_id: &str, table_nam
         if cstatus == "CANCELLED" { continue; }
         let client_items: Vec<_> = all_items.iter().filter(|i| i.9.as_deref() == Some(cid.as_str())).collect();
         let client_total: f64 = client_items.iter().map(|i| i.5).sum();
-        total += client_total;
         let mut items_json = vec![];
         for item in &client_items {
             items_json.push(build_item_json(conn, item)?);
         }
+        let (delivery_name, delivery_price) = if let Some(dtid) = cdelivery_type_id {
+            conn.query_row(
+                "SELECT name, price FROM delivery_types WHERE id=?1",
+                rusqlite::params![dtid],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, f64>(1)?)),
+            ).unwrap_or((None, 0.0))
+        } else {
+            (None, 0.0)
+        };
+        let client_grand_total = client_total + delivery_price;
+        total += client_grand_total;
         let display_name = cname.clone().unwrap_or_else(|| format!("Cliente {cnum}"));
         clients_json.push(serde_json::json!({
             "id": cid,
@@ -255,9 +314,12 @@ fn build_order_json(conn: &Connection, order_id: &str, table_id: &str, table_nam
             "clientNumber": cnum,
             "status": cstatus,
             "displayName": display_name,
-            "total": client_total,
+            "subtotal": client_total,
+            "deliveryPrice": delivery_price,
+            "total": client_grand_total,
             "isDelivery": cdelivery_type_id.is_some(),
             "deliveryTypeId": cdelivery_type_id.clone().unwrap_or_default(),
+            "deliveryTypeName": delivery_name.clone().unwrap_or_default(),
             "isCard": *is_card != 0,
             "notes": cnotes.clone().unwrap_or_default(),
             "items": items_json,
@@ -348,9 +410,12 @@ async fn get_floor_plan(
              ORDER BY floor ASC, name COLLATE NOCASE",
         ).map_err(|e| e.to_string())?;
 
+        // floor se almacena como TEXT '1.0' en la DB — leer como f64 y convertir a i64
         let table_rows: Vec<(String, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<i64>)> =
             tstmt.query_map(rusqlite::params![tenant_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+                let floor_f: Option<f64> = r.get(7).ok().flatten();
+                let floor_i: Option<i64> = floor_f.map(|f| f as i64);
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, floor_i))
             }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
 
         let mut tables_json = vec![];
@@ -406,6 +471,8 @@ async fn get_floor_plan(
         ).map_err(|e| e.to_string())?;
 
         let elements_json: Vec<Value> = estmt.query_map(rusqlite::params![tenant_id], |r| {
+            let floor_f: Option<f64> = r.get::<_, Option<f64>>(7).ok().flatten();
+            let floor_i: i64 = floor_f.map(|f| f as i64).unwrap_or(1);
             Ok(serde_json::json!({
                 "id":     r.get::<_, String>(0)?,
                 "name":   r.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -414,7 +481,7 @@ async fn get_floor_plan(
                 "posY":   r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
                 "width":  r.get::<_, Option<f64>>(5)?.unwrap_or(80.0),
                 "height": r.get::<_, Option<f64>>(6)?.unwrap_or(20.0),
-                "floor":  r.get::<_, Option<i64>>(7)?.unwrap_or(1),
+                "floor":  floor_i,
                 "color":  r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "#d1d5db".to_string()),
             }))
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
@@ -1706,4 +1773,160 @@ async fn print_receipt(
         "ok": false,
         "printError": "Impresion desde API movil no disponible; use la app de escritorio."
     })))
+}
+
+// ---------------------------------------------------------------------------
+// GET /tables/{id}/history
+// Retorna las últimas 20 órdenes cerradas de la mesa, cada una con sus
+// ventas (facturas) y los items con adiciones y salsas.
+// ---------------------------------------------------------------------------
+
+async fn get_table_history(
+    State(context): State<ApiContext>,
+    Extension(user): Extension<AuthUser>,
+    Path(table_id): Path<String>,
+) -> impl IntoResponse {
+    let _ = user;
+    let db_path = context.db_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> DbResult<Value> {
+        let conn = open_db(&db_path)?;
+
+        // Solo mostrar historial si hay caja abierta
+        let session_id = match db_open_cash_session(&conn, &user.tenant_id)? {
+            Some(id) => id,
+            None => return Ok(serde_json::json!({ "noOpenSession": true })),
+        };
+
+        // Órdenes cerradas de la mesa en la caja actual, más recientes primero
+        let mut ostmt = conn.prepare(
+            "SELECT id, opened_at, closed_at, client_name \
+             FROM table_orders \
+             WHERE table_id=?1 AND cash_session_id=?2 AND status='CLOSED' \
+             ORDER BY closed_at DESC LIMIT 20",
+        ).map_err(|e| e.to_string())?;
+
+        let orders: Vec<(String, String, Option<String>, Option<String>)> =
+            ostmt.query_map(rusqlite::params![table_id, session_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+        let mut result_orders = vec![];
+
+        for (order_id, opened_at, closed_at, client_name) in orders {
+            // Ventas (facturas) de esta orden
+            let mut sstmt = conn.prepare(
+                "SELECT id, invoice_number, total, subtotal, \
+                        COALESCE(discount_type,'') as discount_type, \
+                        COALESCE(discount_value,0.0) as discount_value, \
+                        COALESCE(delivery_price,0.0) as delivery_price, \
+                        created_at, client_name \
+                 FROM sales WHERE table_order_id=?1 ORDER BY created_at ASC",
+            ).map_err(|e| e.to_string())?;
+
+            let sales_raw: Vec<(String, String, f64, f64, String, f64, f64, String, Option<String>)> =
+                sstmt.query_map(rusqlite::params![order_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?,
+                        r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+                }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+            let mut sales_json = vec![];
+
+            for (sale_id, invoice_number, total, subtotal, discount_type, discount_value, delivery_price, created_at, sale_client) in sales_raw {
+                // Items de esta venta
+                let mut istmt = conn.prepare(
+                    "SELECT id, product_name, quantity, unit_price, subtotal, \
+                            selected_option, notes, combo_sale_item_id, original_unit_price \
+                     FROM sale_items WHERE sale_id=?1 ORDER BY rowid ASC",
+                ).map_err(|e| e.to_string())?;
+
+                let items_raw: Vec<(String, String, f64, f64, f64, Option<String>, Option<String>, Option<String>, Option<f64>)> =
+                    istmt.query_map(rusqlite::params![sale_id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                            r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+                    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+                let mut items_json = vec![];
+
+                for (item_id, product_name, quantity, unit_price, item_subtotal, selected_option, notes, combo_sale_item_id, original_unit_price) in items_raw {
+                    // Adiciones
+                    let mut astmt = conn.prepare(
+                        "SELECT addition_name, price, quantity FROM sale_item_additions WHERE sale_item_id=?1 ORDER BY rowid ASC",
+                    ).map_err(|e| e.to_string())?;
+                    let additions: Vec<Value> = astmt.query_map(rusqlite::params![item_id], |r| {
+                        Ok(serde_json::json!({
+                            "name": r.get::<_, String>(0)?,
+                            "price": r.get::<_, f64>(1)?,
+                            "quantity": r.get::<_, f64>(2)?,
+                        }))
+                    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+                    // Salsas
+                    let mut saucestmt = conn.prepare(
+                        "SELECT sauce_name FROM sale_item_sauces WHERE sale_item_id=?1 ORDER BY rowid ASC",
+                    ).map_err(|e| e.to_string())?;
+                    let sauces: Vec<Value> = saucestmt.query_map(rusqlite::params![item_id], |r| {
+                        Ok(serde_json::json!({ "name": r.get::<_, String>(0)? }))
+                    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+
+                    let has_discount = original_unit_price
+                        .map(|op| (op - unit_price).abs() > 0.001)
+                        .unwrap_or(false);
+
+                    items_json.push(serde_json::json!({
+                        "id": item_id,
+                        "productName": product_name,
+                        "quantity": quantity,
+                        "unitPrice": unit_price,
+                        "subtotal": item_subtotal,
+                        "selectedOption": selected_option,
+                        "notes": notes,
+                        "comboParentId": combo_sale_item_id,
+                        "originalUnitPrice": original_unit_price,
+                        "hasDiscount": has_discount,
+                        "additions": additions,
+                        "sauces": sauces,
+                    }));
+                }
+
+                let has_discount_sale = discount_type != "" && discount_value > 0.0;
+                sales_json.push(serde_json::json!({
+                    "id": sale_id,
+                    "invoiceNumber": invoice_number,
+                    "total": total,
+                    "subtotal": subtotal,
+                    "discountType": if has_discount_sale { Some(discount_type) } else { None::<String> },
+                    "discountValue": if has_discount_sale { discount_value } else { 0.0 },
+                    "deliveryPrice": delivery_price,
+                    "createdAt": created_at,
+                    "clientName": sale_client,
+                    "items": items_json,
+                }));
+            }
+
+            // Total real de la orden = suma de todas sus ventas
+            let order_total: f64 = sales_json.iter()
+                .filter_map(|s| s.get("total").and_then(|v| v.as_f64()))
+                .sum();
+
+            if order_total > 0.0 || !sales_json.is_empty() {
+                result_orders.push(serde_json::json!({
+                    "id": order_id,
+                    "openedAt": opened_at,
+                    "closedAt": closed_at,
+                    "clientName": client_name,
+                    "total": order_total,
+                    "sales": sales_json,
+                }));
+            }
+        }
+
+        Ok(Value::Array(result_orders))
+    }).await;
+
+    match result {
+        Ok(Ok(v)) => (StatusCode::OK, Json(v)).into_response(),
+        Ok(Err(e)) => err500(e).into_response(),
+        Err(_) => err500("Error interno.").into_response(),
+    }
 }

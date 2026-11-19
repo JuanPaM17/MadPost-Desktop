@@ -594,11 +594,159 @@ function MiniCart({ items, additions, sauces, onRemove, onClone, onEditAdditions
 export type AskSupply = { supplyId: string; name: string; skip: boolean };
 type PendingStep =
   | { type: "stockConfirm"; item: PosGridItem }
-  | { type: "option"; item: PosGridItem; childId?: string; options: string[] }
-  | { type: "additions"; item: PosGridItem }
-  | { type: "sauces"; item: PosGridItem; childId?: string }
+  | { type: "option"; item: PosGridItem; childId: string; options: string[] }
   | { type: "comboChildStep"; item: PosGridItem & { kind: "combo" }; childIdx: number; additionsByChild: Map<string, Record<string, number>> }
-  | { type: "supplyAsk"; item: PosGridItem; supplies: AskSupply[] };
+  | { type: "supplyAsk"; item: PosGridItem; supplies: AskSupply[] }
+  | { type: "productStep"; item: PosGridItem & { kind: "product" }; supplies: AskSupply[] };
+
+// ---------------------------------------------------------------------------
+// ProductStepModal — modal unificada para producto normal al agregar
+// Muestra en orden: opciones, insumos, salsas, adiciones (solo las que aplican)
+// ---------------------------------------------------------------------------
+type ProductStepResult = {
+  selectedOption: string | null;
+  additions: Record<string, number>;
+  sauces: string[];
+  supplies: AskSupply[];
+};
+
+function ProductStepModal({ item, additions, sauces, maxSauces, supplies, initialOption, onClose, onConfirm }: {
+  item: PosGridItem & { kind: "product" };
+  additions: PosAddition[];
+  sauces: PosSauce[];
+  maxSauces: number;
+  supplies: AskSupply[];
+  initialOption: string | null;
+  onClose: () => void;
+  onConfirm: (result: ProductStepResult) => void;
+}) {
+  const hasOptions = item.options.length > 0;
+  const hasSupplies = supplies.length > 0;
+  const hasSauces = item.showSauces && sauces.length > 0;
+  const hasAdditions = item.showAdditions && additions.length > 0;
+
+  const [selectedOption, setSelectedOption] = useState<string | null>(initialOption ?? (item.options[0] ?? null));
+  const [additionQty, setAdditionQty] = useState<Record<string, number>>({});
+  const [selectedSauces, setSelectedSauces] = useState<string[]>([]);
+  const [supplyState, setSupplyState] = useState<AskSupply[]>(supplies);
+  const [search, setSearch] = useState("");
+
+  const filteredAdditions = search.trim()
+    ? additions.filter((a) => normalize(a.name).includes(normalize(search)))
+    : additions;
+
+  function toggleSauce(id: string) {
+    setSelectedSauces((prev) => {
+      const has = prev.includes(id);
+      if (!has && prev.length >= maxSauces) return prev;
+      return has ? prev.filter((s) => s !== id) : [...prev, id];
+    });
+  }
+
+  function toggleSupply(supplyId: string) {
+    setSupplyState((prev) => prev.map((s) => s.supplyId === supplyId ? { ...s, skip: !s.skip } : s));
+  }
+
+  function handleConfirm() {
+    onConfirm({ selectedOption, additions: additionQty, sauces: selectedSauces, supplies: supplyState });
+  }
+
+  return (
+    <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
+      <Box w="full" maxW="560px" bg="white" boxShadow="2xl" borderRadius="md" display="flex" flexDirection="column" maxH="calc(100vh - 48px)">
+        <Box p="6" pb="3" flexShrink="0">
+          <Flex justify="space-between" align="center">
+            <Text fontWeight="bold" fontSize="lg">{item.name}</Text>
+            <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
+          </Flex>
+          {item.categoryName && <Text mt="1" color="gray.500" fontSize="sm">{item.categoryName}</Text>}
+        </Box>
+
+        <Box overflowY="auto" px="6" flex="1">
+          {/* Opciones */}
+          {hasOptions && (
+            <Box mb="5">
+              <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb="2">Opcion</Text>
+              <Flex gap="2" wrap="wrap">
+                {item.options.map((opt) => (
+                  <Button key={opt} size="sm" variant={selectedOption === opt ? "solid" : "outline"} colorPalette={selectedOption === opt ? "orange" : "gray"} onClick={() => setSelectedOption(opt)}>{opt}</Button>
+                ))}
+              </Flex>
+            </Box>
+          )}
+
+          {/* Insumos opcionales */}
+          {hasSupplies && (
+            <Box mb="5">
+              <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb="2">Insumos opcionales</Text>
+              <Flex direction="column" gap="2">
+                {supplyState.map((s) => (
+                  <Flex
+                    key={s.supplyId}
+                    align="center"
+                    justify="space-between"
+                    borderWidth="2px"
+                    borderColor={s.skip ? "gray.200" : "purple.300"}
+                    bg={s.skip ? "gray.50" : "purple.50"}
+                    borderRadius="md"
+                    px="3"
+                    py="2"
+                    cursor="pointer"
+                    onClick={() => toggleSupply(s.supplyId)}
+                  >
+                    <Text fontSize="sm" color={s.skip ? "gray.400" : "gray.800"} textDecoration={s.skip ? "line-through" : undefined}>{s.name}</Text>
+                    <Box w="18px" h="18px" borderRadius="sm" borderWidth="2px" borderColor={s.skip ? "gray.300" : "purple.500"} bg={s.skip ? "white" : "purple.500"} flexShrink="0">
+                      {!s.skip && <Text color="white" fontSize="xs" textAlign="center" lineHeight="14px">✓</Text>}
+                    </Box>
+                  </Flex>
+                ))}
+              </Flex>
+            </Box>
+          )}
+
+          {/* Salsas */}
+          {hasSauces && (
+            <Box mb="5">
+              <Flex align="center" gap="2" mb="2">
+                <Flame size={14} color={selectedSauces.length > 0 ? "#16a34a" : "#94a3b8"} />
+                <Text fontSize="sm" fontWeight="semibold" color="gray.700">Salsas</Text>
+                <Text fontSize="xs" color={selectedSauces.length >= maxSauces ? "green.600" : "gray.400"}>{selectedSauces.length} / {maxSauces} seleccionadas</Text>
+              </Flex>
+              <Flex gap="2" wrap="wrap">
+                {sauces.map((sauce) => {
+                  const active = selectedSauces.includes(sauce.id);
+                  const maxed = !active && selectedSauces.length >= maxSauces;
+                  return <Button key={sauce.id} size="sm" variant={active ? "solid" : "outline"} colorPalette="green" opacity={maxed ? 0.4 : 1} disabled={maxed} onClick={() => toggleSauce(sauce.id)}>{sauce.name}</Button>;
+                })}
+              </Flex>
+            </Box>
+          )}
+
+          {/* Adiciones */}
+          {hasAdditions && (
+            <Box mb="2">
+              <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb="2">Adiciones</Text>
+              {additions.length > 6 && (
+                <Box mb="3" position="relative">
+                  <Search size={16} color="#64748b" style={{ position: "absolute", left: 11, top: 11, zIndex: 1 }} />
+                  <Input pl="9" size="sm" placeholder="Buscar adicion..." value={search} onChange={(e) => setSearch(e.target.value)} />
+                </Box>
+              )}
+              <AdditionsGrid additions={filteredAdditions} quantities={additionQty} onChange={(id, delta) => setAdditionQty((prev) => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) + delta) }))} />
+            </Box>
+          )}
+        </Box>
+
+        <Box p="6" pt="4" flexShrink="0">
+          <Flex justify="end" gap="2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button colorPalette="purple" disabled={hasOptions && !selectedOption} onClick={handleConfirm}>Agregar</Button>
+          </Flex>
+        </Box>
+      </Box>
+    </Flex>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // ProductCatalogPanel
@@ -705,12 +853,18 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         askSupplies: [],
       };
       pendingCartItem.current = ci;
-      if (item.options.length > 0) {
-        setPending({ type: "option", item, options: item.options });
-      } else if (item.showAdditions && additions.length > 0) {
-        setPending({ type: "additions", item });
-      } else if (item.showSauces && sauces.length > 0) {
-        setPending({ type: "sauces", item });
+      const hasAnyStep = item.options.length > 0 || (item.showAdditions && additions.length > 0) || (item.showSauces && sauces.length > 0);
+      if (hasAnyStep) {
+        // Pre-cargar insumos ask para mostrarlos en la modal unificada
+        void posService.askSupplies(item.id).then((asks) => {
+          const supplies: AskSupply[] = asks.map((s) => ({ supplyId: s.supplyId, name: s.name, skip: false }));
+          if (pendingCartItem.current) {
+            pendingCartItem.current = { ...pendingCartItem.current, askSupplies: supplies };
+          }
+          setPending({ type: "productStep", item, supplies });
+        }).catch(() => {
+          setPending({ type: "productStep", item, supplies: [] });
+        });
       } else {
         void checkSupplyAskThenCommit(ci, item);
       }
@@ -785,6 +939,20 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     }
   }
 
+  function handleProductStepDone(result: ProductStepResult) {
+    if (!pendingCartItem.current || !pending || pending.type !== "productStep") return;
+    const skipped = result.supplies.filter((s) => s.skip).map((s) => s.supplyId);
+    const ci: CartItem = {
+      ...pendingCartItem.current,
+      selectedOption: result.selectedOption,
+      additions: result.additions,
+      sauces: result.sauces,
+      skippedSupplies: skipped,
+      askSupplies: result.supplies,
+    };
+    commitItem(ci, pending.item);
+  }
+
   function handleSupplyAskDone(supplies: AskSupply[]) {
     if (!pendingCartItem.current || !pending || pending.type !== "supplyAsk") return;
     const skipped = supplies.filter((s) => s.skip).map((s) => s.supplyId);
@@ -827,7 +995,7 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
 
   function handleOptionConfirm(option: string) {
     if (!pendingCartItem.current || !pending) return;
-    const p = pending as { type: "option"; item: PosGridItem; childId?: string };
+    const p = pending as { type: "option"; item: PosGridItem; childId: string };
     if (p.childId) {
       // opcion de hijo de combo
       pendingCartItem.current = {
@@ -845,26 +1013,6 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
       } else {
         continueComboAfterOptions(p.item as PosGridItem & { kind: "combo" }, pendingCartItem.current);
       }
-    } else {
-      // opcion de producto simple
-      pendingCartItem.current = { ...pendingCartItem.current, selectedOption: option };
-      if (p.item.kind === "product" && p.item.showAdditions && additions.length > 0) {
-        setPending({ type: "additions", item: p.item });
-      } else if (p.item.kind === "product" && p.item.showSauces && sauces.length > 0) {
-        setPending({ type: "sauces", item: p.item });
-      } else {
-        void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
-      }
-    }
-  }
-
-  function handleAdditionsDone() {
-    if (!pendingCartItem.current || !pending) return;
-    const p = pending as { type: "additions"; item: PosGridItem };
-    if (p.item.kind === "product" && p.item.showSauces && sauces.length > 0) {
-      setPending({ type: "sauces", item: p.item });
-    } else {
-      void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
     }
   }
 
@@ -879,12 +1027,6 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
     } else {
       commitItem(pendingCartItem.current, p.item);
     }
-  }
-
-  function handleSaucesDone() {
-    if (!pendingCartItem.current || !pending) return;
-    const p = pending as { type: "sauces"; item: PosGridItem };
-    void checkSupplyAskThenCommit(pendingCartItem.current, p.item);
   }
 
   // ---------- edicion desde mini-carrito ----------
@@ -995,53 +1137,26 @@ export function ProductCatalogPanel({ onConfirm, onCancel }: {
         />
       ) : null}
 
-      {pending?.type === "option" ? (
+      {pending?.type === "option" && pending.childId ? (
         <OptionModal
-          name={`${pending.item.name}${pending.childId ? ` — ${pendingCartItem.current?.children.find((c) => c.productId === pending.childId)?.name ?? ""}` : ""}`}
+          name={`${pending.item.name} — ${pendingCartItem.current?.children.find((c) => c.productId === pending.childId)?.name ?? ""}`}
           options={pending.options}
-          selected={
-            pending.childId
-              ? (pendingCartItem.current?.children.find((c) => c.productId === pending.childId)?.selectedOption ?? null)
-              : (pendingCartItem.current?.selectedOption ?? null)
-          }
+          selected={pendingCartItem.current?.children.find((c) => c.productId === pending.childId)?.selectedOption ?? null}
           onClose={cancelFlow}
           onConfirm={handleOptionConfirm}
         />
       ) : null}
 
-      {pending?.type === "additions" && pendingCartItem.current ? (
-        <AdditionsModal
-          name={pending.item.name}
+      {pending?.type === "productStep" && pendingCartItem.current ? (
+        <ProductStepModal
+          item={pending.item}
           additions={additions}
-          quantities={pendingCartItem.current.additions}
-          onClose={cancelFlow}
-          onChange={(id, delta) => {
-            if (!pendingCartItem.current) return;
-            pendingCartItem.current = { ...pendingCartItem.current, additions: { ...pendingCartItem.current.additions, [id]: Math.max(0, (pendingCartItem.current.additions[id] ?? 0) + delta) } };
-            // fuerza re-render pasando por un state auxiliar
-            setPending({ ...pending });
-          }}
-          onConfirm={handleAdditionsDone}
-          confirmLabel={pending.item.kind === "product" && pending.item.showSauces && sauces.length > 0 ? "Siguiente: Salsas" : "Agregar"}
-        />
-      ) : null}
-
-      {pending?.type === "sauces" && pendingCartItem.current ? (
-        <SaucesModal
-          name={pending.item.name}
           sauces={sauces}
           maxSauces={maxSauces}
-          selected={pendingCartItem.current.sauces}
+          supplies={pending.supplies}
+          initialOption={pendingCartItem.current.selectedOption}
           onClose={cancelFlow}
-          onToggle={(id) => {
-            if (!pendingCartItem.current) return;
-            const has = pendingCartItem.current.sauces.includes(id);
-            if (!has && pendingCartItem.current.sauces.length >= maxSauces) return;
-            pendingCartItem.current = { ...pendingCartItem.current, sauces: has ? pendingCartItem.current.sauces.filter((s) => s !== id) : [...pendingCartItem.current.sauces, id] };
-            setPending({ ...pending });
-          }}
-          onConfirm={handleSaucesDone}
-          confirmLabel="Agregar"
+          onConfirm={handleProductStepDone}
         />
       ) : null}
 

@@ -2952,8 +2952,9 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
 
   return (
     <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.600" align="center" justify="center" p="4">
-      <Box w="full" maxW="520px" maxH="calc(100vh - 32px)" overflowY="auto" bg="white" borderRadius="lg" boxShadow="2xl">
-        <Flex px="6" pt="6" pb="4" align="center" justify="space-between" borderBottomWidth="1px" borderColor="gray.100">
+      <Flex w="full" maxW="520px" maxH="calc(100vh - 32px)" direction="column" bg="white" borderRadius="lg" boxShadow="2xl" overflow="hidden">
+        {/* Header fijo */}
+        <Flex px="6" pt="6" pb="4" align="center" justify="space-between" borderBottomWidth="1px" borderColor="gray.100" flexShrink="0">
           <Box>
             <Heading size="lg">Cobrar — {slotLabel ?? (targetClientId && client ? (client.client_name?.trim() || `Cliente ${client.client_number}`) : table.name)}</Heading>
             {slotLabel && <Text fontSize="sm" color="gray.500" mt="0.5">{table.name}</Text>}
@@ -2961,7 +2962,8 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
           {!hideCancelButton && <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>}
         </Flex>
 
-        <Box px="6" py="5">
+        {/* Body scrolleable */}
+        <Box flex="1" overflowY="auto" px="6" py="5">
           {/* Total */}
           <Flex direction="column" align="center" mb="6">
             <Text fontSize="sm" color="gray.500" fontWeight="medium">Total</Text>
@@ -3055,13 +3057,15 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
           )}
 
           {/* Nota */}
-          <Box mb="5">
+          <Box>
             <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb="1">Nota del pedido</Text>
             <Input value={orderNote} onChange={(e) => setOrderNote(e.target.value)} placeholder="Opcional..." />
           </Box>
+        </Box>
 
-          {/* Imprimir */}
-          <Flex mb="6" align="center" justify="space-between">
+        {/* Footer fijo */}
+        <Box px="6" pt="4" pb="5" borderTopWidth="1px" borderColor="gray.100" flexShrink="0">
+          <Flex mb="4" align="center" justify="space-between">
             <Box>
               <Text fontSize="sm" fontWeight="semibold" color="gray.700">Imprimir factura</Text>
               {!hasPrinter && <Text fontSize="xs" color="gray.400">No hay impresora configurada o detectada</Text>}
@@ -3070,12 +3074,11 @@ function TableCheckoutModal({ table, order, cash, clients, targetClientId, allIt
               {printInvoice ? "Si" : "No"}
             </Button>
           </Flex>
-
           <Button w="full" colorPalette="purple" size="lg" loading={saving} disabled={cashInsufficient || splitInvalid || saving} onClick={() => void handleConfirm()}>
             Confirmar cobro
           </Button>
         </Box>
-      </Box>
+      </Flex>
     </Flex>
   );
 }

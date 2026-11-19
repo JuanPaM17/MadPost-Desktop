@@ -1,5 +1,5 @@
 import { Box, Button, Flex, Heading, Input, Separator, Stack, Table, Text, Textarea } from "@chakra-ui/react";
-import { Clipboard, Eraser, Play, Search } from "lucide-react";
+import { Clipboard, Eraser, Play, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 
@@ -11,6 +11,10 @@ export function SqlEditorView() {
   const [columns, setColumns] = useState<string[]>([]); const [rows, setRows] = useState<ResultRow[]>([]);
   const [status, setStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [filter, setFilter] = useState(""); const [menu, setMenu] = useState<MenuState>(null);
+  const [deletingRow, setDeletingRow] = useState<number | null>(null);
+  const [lastQueryTable, setLastQueryTable] = useState<string | null>(null);
+  const [editingCell, setEditingCell] = useState<{ rowIndex: number; col: string; value: string } | null>(null);
+  const [savingCell, setSavingCell] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { void loadTables(); }, []);
@@ -34,9 +38,11 @@ export function SqlEditorView() {
       const database = await databaseManager.database(); let affected = 0;
       for (const statement of writes) { const result = await database.execute(statement); affected += result.rowsAffected; }
       if (reads.length) {
-        const result = await database.select<ResultRow[]>(reads.at(-1)!);
-        const resultColumns = result.length ? Object.keys(result[0]) : inferColumns(reads.at(-1)!);
+        const lastRead = reads.at(-1)!;
+        const result = await database.select<ResultRow[]>(lastRead);
+        const resultColumns = result.length ? Object.keys(result[0]) : inferColumns(lastRead);
         setColumns(resultColumns); setRows(result);
+        setLastQueryTable(extractTableFromSelect(lastRead));
         setStatus({ message: `${result.length} fila(s) en ${elapsed(startedAt)}ms`, error: false });
       } else {
         setColumns([]); setRows([]);
@@ -47,7 +53,73 @@ export function SqlEditorView() {
   }
 
   function queryTable(table: string, count = false) { const query = count ? `SELECT COUNT(*) AS total FROM ${quoteIdentifier(table)};` : `SELECT * FROM ${quoteIdentifier(table)} ORDER BY rowid DESC LIMIT 100;`; setSql(query); void runQuery(query); }
-  function clear() { setSql(""); setColumns([]); setRows([]); setStatus(null); editorRef.current?.focus(); }
+  function clear() { setSql(""); setColumns([]); setRows([]); setStatus(null); setLastQueryTable(null); editorRef.current?.focus(); }
+
+  async function deleteRow(row: ResultRow, rowIndex: number) {
+    if (!lastQueryTable) { setStatus({ message: "No se puede eliminar: no se detectó la tabla del SELECT.", error: true }); return; }
+    setDeletingRow(rowIndex);
+    try {
+      const database = await databaseManager.database();
+      const table = quoteIdentifier(lastQueryTable);
+      let deleteSql: string;
+      if ("rowid" in row && row.rowid !== null && row.rowid !== undefined) {
+        deleteSql = `DELETE FROM ${table} WHERE rowid = ${Number(row.rowid)}`;
+      } else {
+        const conditions = columns.map((col) => {
+          const val = row[col];
+          if (val === null || val === undefined) return `${quoteIdentifier(col)} IS NULL`;
+          return `${quoteIdentifier(col)} = ${typeof val === "number" ? val : `'${String(val).replaceAll("'", "''")}'`}`;
+        }).join(" AND ");
+        deleteSql = `DELETE FROM ${table} WHERE ${conditions}`;
+      }
+      await database.execute(deleteSql);
+      setRows((prev) => prev.filter((_, i) => i !== rowIndex));
+      setStatus({ message: `Fila eliminada correctamente.`, error: false });
+    } catch (error) {
+      setStatus({ message: `Error al eliminar: ${error instanceof Error ? error.message : String(error)}`, error: true });
+    } finally {
+      setDeletingRow(null);
+    }
+  }
+  function startEdit(rowIndex: number, col: string, currentValue: unknown) {
+    if (!lastQueryTable) return;
+    setEditingCell({ rowIndex, col, value: formatValue(currentValue) });
+    setMenu(null);
+  }
+
+  async function commitEdit() {
+    if (!editingCell || !lastQueryTable) { setEditingCell(null); return; }
+    const { rowIndex, col, value } = editingCell;
+    const row = rows[rowIndex];
+    const original = formatValue(row[col]);
+    if (value === original) { setEditingCell(null); return; }
+    setSavingCell(true);
+    try {
+      const database = await databaseManager.database();
+      const table = quoteIdentifier(lastQueryTable);
+      const newVal = value === "" ? "NULL" : `'${value.replaceAll("'", "''")}'`;
+      let updateSql: string;
+      if ("rowid" in row && row.rowid !== null && row.rowid !== undefined) {
+        updateSql = `UPDATE ${table} SET ${quoteIdentifier(col)} = ${newVal} WHERE rowid = ${Number(row.rowid)}`;
+      } else {
+        const conditions = columns.map((c) => {
+          const v = row[c];
+          if (v === null || v === undefined) return `${quoteIdentifier(c)} IS NULL`;
+          return `${quoteIdentifier(c)} = ${typeof v === "number" ? v : `'${String(v).replaceAll("'", "''")}'`}`;
+        }).join(" AND ");
+        updateSql = `UPDATE ${table} SET ${quoteIdentifier(col)} = ${newVal} WHERE ${conditions}`;
+      }
+      await database.execute(updateSql);
+      setRows((prev) => prev.map((r, i) => i === rowIndex ? { ...r, [col]: value === "" ? null : value } : r));
+      setStatus({ message: `Celda actualizada correctamente.`, error: false });
+    } catch (error) {
+      setStatus({ message: `Error al actualizar: ${error instanceof Error ? error.message : String(error)}`, error: true });
+    } finally {
+      setSavingCell(false);
+      setEditingCell(null);
+    }
+  }
+
   async function copyResults() { if (!columns.length) return; await copyText([columns.join("\t"), ...rows.map((row) => columns.map((column) => formatValue(row[column])).join("\t"))].join("\n")); setStatus({ message: "Resultados copiados al portapapeles.", error: false }); }
   const visibleTables = tables.filter((table) => table.toLowerCase().includes(filter.toLowerCase()));
 
@@ -56,7 +128,17 @@ export function SqlEditorView() {
     <Separator orientation="vertical" />
     <Flex flex="1" minW="0" direction="column"><Box flex="0 0 35%" minH="230px" p="5"><Flex justify="space-between" align="center" mb="3"><Heading size="sm">Consulta SQL</Heading><Flex gap="2"><Button size="sm" colorPalette="purple" onClick={() => void runQuery()}><Play size={16} />Ejecutar</Button><Button size="sm" variant="outline" onClick={clear}><Eraser size={16} />Limpiar</Button><Button size="sm" variant="outline" disabled={!columns.length} onClick={() => void copyResults()}><Clipboard size={16} />Copiar resultados</Button></Flex></Flex><Textarea ref={editorRef} h="calc(100% - 38px)" minH="150px" resize="none" wrap="off" fontFamily="Consolas, 'Courier New', monospace" placeholder={"Escribe tu consulta SQL aqui...\nCtrl+Enter para ejecutar"} value={sql} onChange={(event) => setSql(event.target.value)} onKeyDown={(event) => { if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); void runQuery(); } }} /></Box>
       <Separator />
-      <Flex flex="1" minH="0" direction="column" p="5"><Flex minH="24px" mb="2" align="center"><Text fontSize="sm" color={status?.error ? "red.600" : "#10b981"}>{status?.message ?? ""}</Text></Flex><Box flex="1" overflow="auto" borderWidth="1px" borderColor="gray.200">{columns.length ? <Table.Root size="sm" variant="line" minW="max-content"><Table.Header><Table.Row>{columns.map((column) => <Table.ColumnHeader key={column} minW="140px">{column}</Table.ColumnHeader>)}</Table.Row></Table.Header><Table.Body>{rows.map((row, rowIndex) => <Table.Row key={rowIndex}>{columns.map((column) => <Table.Cell key={column} minW="140px" onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, row, cell: row[column] }); }}>{formatValue(row[column])}</Table.Cell>)}</Table.Row>)}</Table.Body></Table.Root> : <Flex h="full" minH="200px" align="center" justify="center"><Text color="gray.500">Sin resultados</Text></Flex>}</Box></Flex>
+      <Flex flex="1" minH="0" direction="column" p="5"><Flex minH="24px" mb="2" align="center"><Text fontSize="sm" color={status?.error ? "red.600" : "#10b981"}>{status?.message ?? ""}</Text></Flex><Box flex="1" overflow="auto" borderWidth="1px" borderColor="gray.200">{columns.length ? <Table.Root size="sm" variant="line" minW="max-content"><Table.Header><Table.Row>{columns.map((column) => <Table.ColumnHeader key={column} minW="140px">{column}</Table.ColumnHeader>)}{lastQueryTable ? <Table.ColumnHeader w="52px" /> : null}</Table.Row></Table.Header><Table.Body>{rows.map((row, rowIndex) => <Table.Row key={rowIndex}>{columns.map((column) => {
+                      const isEditing = editingCell?.rowIndex === rowIndex && editingCell.col === column;
+                      return <Table.Cell key={column} minW="140px" onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, row, cell: row[column] }); }} onDoubleClick={() => startEdit(rowIndex, column, row[column])} title={lastQueryTable ? "Doble click para editar" : undefined} style={{ cursor: lastQueryTable ? "text" : undefined }}>
+                        {isEditing
+                          ? <Input autoFocus size="xs" value={editingCell.value} disabled={savingCell}
+                              onChange={(e) => setEditingCell((prev) => prev ? { ...prev, value: e.target.value } : prev)}
+                              onBlur={() => void commitEdit()}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void commitEdit(); } if (e.key === "Escape") setEditingCell(null); }} />
+                          : formatValue(row[column])}
+                      </Table.Cell>;
+                    })}{lastQueryTable ? <Table.Cell w="52px" px="1"><Button size="xs" colorPalette="red" variant="ghost" loading={deletingRow === rowIndex} onClick={() => void deleteRow(row, rowIndex)} title="Eliminar fila"><Trash2 size={14} /></Button></Table.Cell> : null}</Table.Row>)}</Table.Body></Table.Root> : <Flex h="full" minH="200px" align="center" justify="center"><Text color="gray.500">Sin resultados</Text></Flex>}</Box></Flex>
     </Flex>
     {menu?.table ? <ContextMenu x={menu.x} y={menu.y}><Button variant="ghost" justifyContent="start" onClick={() => queryTable(menu.table!)}><Search size={16} />Consultar tabla</Button><Button variant="ghost" justifyContent="start" onClick={() => queryTable(menu.table!, true)}><Search size={16} />Contar filas</Button></ContextMenu> : null}
     {menu?.row ? <ContextMenu x={menu.x} y={menu.y}><Button variant="ghost" justifyContent="start" onClick={() => void copyText(formatValue(menu.cell))}><Clipboard size={16} />Copiar celda</Button><Button variant="ghost" justifyContent="start" onClick={() => void copyText(columns.map((column) => formatValue(menu.row![column])).join("\t"))}><Clipboard size={16} />Copiar fila</Button></ContextMenu> : null}
@@ -70,3 +152,4 @@ function elapsed(startedAt: number) { return Math.round(performance.now() - star
 function formatValue(value: unknown) { return value === null || value === undefined ? "" : String(value); }
 function inferColumns(sql: string) { const aliases = /select\s+(.+?)\s+from/i.exec(sql)?.[1]; return aliases ? aliases.split(",").map((part) => part.trim().split(/\s+as\s+/i).at(-1) ?? part.trim()) : []; }
 async function copyText(value: string) { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return; } const textarea = document.createElement("textarea"); textarea.value = value; document.body.append(textarea); textarea.select(); document.execCommand("copy"); textarea.remove(); }
+function extractTableFromSelect(sql: string): string | null { const match = /\bFROM\s+["']?(\w+)["']?/i.exec(sql); return match ? match[1] : null; }
