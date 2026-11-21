@@ -22,7 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(mobile_api::MobileRuntimeState::default())
         .manage(DownloadedUpdate(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, list_releases, check_for_update_v2, download_update, install_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
+        .invoke_handler(tauri::generate_handler![get_hostname, ensure_scheduled_tasks_registered, start_mobile_api, stop_mobile_api, mobile_api_status, publish_mdns, unpublish_mdns, broadcast_table_updated, list_releases, check_for_update_v2, download_update, install_update_v2, open_help_url, save_export_file, save_and_open_cash_close_pdf, save_and_open_invoice_pdf, open_cash_drawer, print_comanda, list_printers, store_logo, open_backups_folder, r2_configuration, r2_test_connection, r2_list_objects, r2_put_object, r2_delete_object, export_db_backup, restore_db_backup, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -51,6 +51,11 @@ fn publish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>, tenant_
 
 #[tauri::command]
 fn unpublish_mdns(state: tauri::State<'_, mobile_api::MobileRuntimeState>) -> mobile_api::NativeResult { mobile_api::unpublish_mdns(&state) }
+
+#[tauri::command]
+fn broadcast_table_updated(state: tauri::State<'_, mobile_api::MobileRuntimeState>, table_id: String) {
+    mobile_api::broadcast_table_updated(&state, table_id);
+}
 
 #[derive(Serialize)]
 pub struct ReleaseEntry { pub version: String, pub date: String, pub notes: String }

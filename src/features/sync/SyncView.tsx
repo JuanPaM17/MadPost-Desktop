@@ -169,6 +169,7 @@ const TABLE_NAMES: Record<string, string> = {
   combos: "Combos",
   combo_items: "Items de combo",
   cash_sessions: "Cajas",
+  cash_expenses: "Gastos de caja",
   delivery_types: "Tipos de domicilio",
   sales: "Ventas",
   sale_items: "Items de venta",

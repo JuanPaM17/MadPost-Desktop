@@ -16,6 +16,7 @@ import {
   CircleDollarSign,
   Download,
   FileText,
+  Pencil,
   Plus,
   Search,
   Trash2,
@@ -30,6 +31,7 @@ import { notify } from "../../components/ui/AppToaster";
 import { businessConfigService } from "../config/BusinessConfigService";
 import {
   cashRegisterService,
+  type CashExpense,
   type CashSession,
   type CashSummary,
   type CashTopProduct,
@@ -41,6 +43,7 @@ export function CashRegisterView() {
   const current = sessionContext.current();
   const [open, setOpen] = useState<CashSession | null>(null);
   const [summary, setSummary] = useState<CashSummary | null>(null);
+  const [expenses, setExpenses] = useState<CashExpense[]>([]);
   const [sessions, setSessions] = useState<CashSession[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -51,13 +54,24 @@ export function CashRegisterView() {
   const [detail, setDetail] = useState<{
     cash: CashSession;
     summary: CashSummary;
+    expenses: CashExpense[];
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => {
     try {
       const active = await cashRegisterService.getOpenSession();
       setOpen(active);
-      setSummary(active ? await cashRegisterService.summary(active.id) : null);
+      if (active) {
+        const [s, e] = await Promise.all([
+          cashRegisterService.summary(active.id),
+          cashRegisterService.listExpenses(active.id),
+        ]);
+        setSummary(s);
+        setExpenses(e);
+      } else {
+        setSummary(null);
+        setExpenses([]);
+      }
       setSessions(await cashRegisterService.listSessions());
     } catch (error) {
       notify.error(
@@ -126,11 +140,11 @@ export function CashRegisterView() {
     setDialog(summary?.saleCount === 0 ? "close-empty" : "close");
   }
 
-  async function close(amount: number) {
+  async function close(amount: number, baseAmount?: number) {
     if (!open) return;
     setBusy(true);
     try {
-      await cashRegisterService.closeSession(open, amount);
+      await cashRegisterService.closeSession(open, amount, baseAmount);
       void backupScheduler.onCashSessionClosed(sessionContext.current()?.tenantId ?? "");
       notify.success("Caja cerrada correctamente.");
       setDialog(null);
@@ -148,7 +162,9 @@ export function CashRegisterView() {
     if (!open) return;
     setBusy(true);
     try {
-      const closed = await cashRegisterService.closeSession(open, open.openingAmount);
+      const exp = await cashRegisterService.listExpenses(open.id);
+      const totalExp = exp.reduce((s, e) => s + e.amount, 0);
+      const closed = await cashRegisterService.closeSession(open, open.openingAmount - totalExp);
       void backupScheduler.onCashSessionClosed(sessionContext.current()?.tenantId ?? "");
       await cashRegisterService.deleteClosedSession(closed.cash, true);
       notify.success("Caja eliminada sin registrar.");
@@ -183,7 +199,11 @@ export function CashRegisterView() {
   }
   async function showDetail(cash: CashSession) {
     try {
-      setDetail({ cash, summary: await cashRegisterService.summary(cash.id) });
+      const [s, e] = await Promise.all([
+        cashRegisterService.summary(cash.id),
+        cashRegisterService.listExpenses(cash.id),
+      ]);
+      setDetail({ cash, summary: s, expenses: e });
     } catch {
       notify.error("No fue posible cargar el detalle de la caja.");
     }
@@ -196,6 +216,13 @@ export function CashRegisterView() {
         onClose={() => void requestClose()}
       />
       {open && summary ? <SummaryGrid summary={summary} /> : null}
+      {open ? (
+        <ExpensesPanel
+          session={open}
+          expenses={expenses}
+          onRefresh={refresh}
+        />
+      ) : null}
       <Box mt="8" mb="4" maxW="420px" position="relative">
         <Search
           size={17}
@@ -272,11 +299,10 @@ export function CashRegisterView() {
         />
       ) : null}
       {dialog === "close" && open && summary ? (
-        <AmountDialog
-          title="Cerrar caja"
-          label="Monto real en caja al cerrar"
-          initial={open.openingAmount + summary.cash}
-          detail={`Efectivo esperado: ${money(open.openingAmount + summary.cash)} · ${summary.saleCount} ventas`}
+        <CloseDialog
+          cash={open}
+          summary={summary}
+          expenses={expenses}
           busy={busy}
           onClose={() => setDialog(null)}
           onConfirm={close}
@@ -303,6 +329,7 @@ export function CashRegisterView() {
         <CashDetailDialog
           cash={detail.cash}
           summary={detail.summary}
+          expenses={detail.expenses}
           onClose={() => setDetail(null)}
         />
       ) : null}
@@ -485,21 +512,26 @@ function HistoryRow({
 function CashDetailDialog({
   cash,
   summary,
+  expenses,
   onClose,
 }: {
   cash: CashSession;
   summary: CashSummary;
+  expenses: CashExpense[];
   onClose: () => void;
 }) {
   const [generating, setGenerating] = useState(false);
   const [topProducts, setTopProducts] = useState<CashTopProduct[]>([]);
   const [business, setBusiness] = useState<{ name: string; invoiceFooter: string } | null>(null);
+  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
   const difference = (cash.closingAmount ?? 0) - (cash.expectedAmount ?? 0);
   useEffect(() => { void Promise.all([cashRegisterService.topProducts(cash.id), businessConfigService.load()]).then(([top, settings]) => { setTopProducts(top); setBusiness({ name: settings.name, invoiceFooter: settings.invoiceFooter }); }); }, [cash.id]);
   async function downloadPdf() {
     setGenerating(true);
     try {
-      const estimatedHeight = 88 + (summary.deliveryCount > 0 ? 24 : 0) + topProducts.length * 4 + Math.ceil((business?.invoiceFooter?.length ?? 22) / 32) * 4;
+      const expensesHeight = expenses.length > 0 ? 8 + expenses.length * 4 : 0;
+      const baseHeight = cash.baseAmount !== null ? 4 : 0;
+      const estimatedHeight = 88 + (summary.deliveryCount > 0 ? 24 : 0) + topProducts.length * 4 + expensesHeight + baseHeight + Math.ceil((business?.invoiceFooter?.length ?? 22) / 32) * 4;
       const pdf = new jsPDF({ unit: "mm", format: [58, Math.max(115, estimatedHeight)] }); const center = 29; let y = 8;
       const centered = (text: string, bold = false) => { pdf.setFont("helvetica", bold ? "bold" : "normal"); pdf.setFontSize(8); pdf.text(text, center, y, { align: "center", maxWidth: 52 }); y += 4.5; };
       const row = (label: string, value: string, bold = false) => { pdf.setFont("helvetica", bold ? "bold" : "normal"); pdf.setFontSize(7); pdf.text(label, 3, y); pdf.text(value, 55, y, { align: "right" }); y += 4; };
@@ -509,13 +541,17 @@ function CashDetailDialog({
       centered("RESUMEN DE VENTAS", true); row("Ventas realizadas:", String(summary.saleCount)); row("Total vendido:", money(summary.total)); row("Efectivo:", money(summary.cash)); row("Tarjeta:", money(summary.card)); separator();
       if (summary.deliveryCount > 0) { centered("DOMICILIOS", true); row("Domicilios:", String(summary.deliveryCount)); row("Total domicilios:", money(summary.delivery)); if (summary.deliveryCashCount > 0) row("Efectivo:", `${summary.deliveryCashCount} (${money(summary.deliveryCash)})`); if (summary.deliveryCardCount > 0) row("Tarjeta:", `${summary.deliveryCardCount} (${money(summary.deliveryCard)})`); row("Cobro domicilios:", money(summary.deliveryCollection)); separator(); }
       if (topProducts.length) { centered("TOP PRODUCTOS", true); topProducts.forEach((item, index) => row(`${index + 1}. ${truncate(item.name, 22)}`, `${item.quantity}x`)); separator(); }
-      centered("CIERRE", true); row("Efectivo esperado:", money(cash.expectedAmount ?? 0)); row("Efectivo real:", money(cash.closingAmount ?? 0)); row("Diferencia:", `${difference > 0 ? "+" : ""}${money(difference)}`, true); separator(); centered(business?.invoiceFooter || "Gracias por su compra!");
+      if (expenses.length > 0) { centered("GASTOS DE CAJA", true); expenses.forEach((e) => row(truncate(e.description, 22), `-${money(e.amount)}`)); row("Total gastos:", `-${money(totalExpenses)}`, true); separator(); }
+      centered("CIERRE", true);
+      row("Efectivo esperado:", money(cash.expectedAmount ?? 0));
+      if (expenses.length > 0) row("(Incluye descuento de gastos)", "");
+      row("Efectivo real:", money(cash.closingAmount ?? 0));
+      if (cash.baseAmount !== null) { row("Base dejada:", money(cash.baseAmount)); row("Remesa retirada:", money((cash.closingAmount ?? 0) - cash.baseAmount), true); }
+      row("Diferencia:", `${difference > 0 ? "+" : ""}${money(difference)}`, true);
+      separator(); centered(business?.invoiceFooter || "Gracias por su compra!");
       const bytes = Array.from(new Uint8Array(pdf.output("arraybuffer")));
       const fileName = `cierre-caja-${cash.sessionNumber}-${cash.id.slice(0, 8)}.pdf`;
-      const path = await invoke<string>("save_and_open_cash_close_pdf", {
-        fileName,
-        bytes,
-      });
+      await invoke<string>("save_and_open_cash_close_pdf", { fileName, bytes });
       notify.success("Reporte de cierre generado.");
     } catch (error) {
       notify.error(
@@ -555,14 +591,8 @@ function CashDetailDialog({
           rows={[
             ["Domicilios", String(summary.deliveryCount)],
             ["Total domicilios", money(summary.delivery)],
-            [
-              "Efectivo",
-              `${summary.deliveryCashCount} (${money(summary.deliveryCash)})`,
-            ],
-            [
-              "Tarjeta",
-              `${summary.deliveryCardCount} (${money(summary.deliveryCard)})`,
-            ],
+            ["Efectivo", `${summary.deliveryCashCount} (${money(summary.deliveryCash)})`],
+            ["Tarjeta", `${summary.deliveryCardCount} (${money(summary.deliveryCard)})`],
             ["Cobro domicilios", money(summary.deliveryCollection)],
           ]}
         />
@@ -576,15 +606,24 @@ function CashDetailDialog({
           ])}
         />
       ) : null}
+      {expenses.length > 0 ? (
+        <DetailCard
+          title="Gastos de caja"
+          rows={[
+            ...expenses.map((e) => [e.description, `-${money(e.amount)}`]),
+            ["Total gastos", `-${money(totalExpenses)}`],
+          ]}
+        />
+      ) : null}
       <DetailCard
         title="Cierre"
         rows={[
           ["Efectivo esperado", money(cash.expectedAmount ?? 0)],
+          ...(expenses.length > 0 ? [["(Gastos descontados)", `-${money(totalExpenses)}`]] : []),
           ["Efectivo real", money(cash.closingAmount ?? 0)],
-          [
-            "Diferencia",
-            `${difference > 0 ? "+" : ""}${money(difference)}`,
-          ],
+          ...(cash.baseAmount !== null ? [["Base dejada", money(cash.baseAmount)]] : []),
+          ...(cash.baseAmount !== null ? [["Remesa retirada", money((cash.closingAmount ?? 0) - cash.baseAmount)]] : []),
+          ["Diferencia", `${difference > 0 ? "+" : ""}${money(difference)}`],
         ]}
       />
       <Flex mt="7" justify="space-between" gap="3">
@@ -603,7 +642,308 @@ function CashDetailDialog({
     </Modal>
   );
 }
-function DetailCard({ title, rows }: { title: string; rows: string[][] }) { return <Box mt="5" p="4" bg="gray.50" borderWidth="1px" borderColor="gray.200" borderRadius="md"><Text fontWeight="bold" fontSize="sm" mb="3">{title}</Text><Stack gap="2">{rows.map(([label, value]) => <Flex key={label} justify="space-between" gap="4"><Text color="gray.600" fontSize="sm">{label}</Text><Text textAlign="right" fontWeight="semibold" fontSize="sm">{value}</Text></Flex>)}</Stack></Box>; }
+function ExpensesPanel({
+  session,
+  expenses,
+  onRefresh,
+}: {
+  session: CashSession;
+  expenses: CashExpense[];
+  onRefresh: () => Promise<void>;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [desc, setDesc] = useState("");
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDesc, setEditDesc] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+
+  async function add() {
+    const parsed = parseMoney(amount);
+    if (!desc.trim() || parsed === null || parsed <= 0) return;
+    setBusy(true);
+    try {
+      await cashRegisterService.addExpense(session.id, desc, parsed);
+      setDesc("");
+      setAmount("");
+      setShowForm(false);
+      await onRefresh();
+    } catch (error) {
+      notify.error("No se pudo agregar el gasto.", error instanceof Error ? error.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEdit(e: CashExpense) {
+    setEditingId(e.id);
+    setEditDesc(e.description);
+    setEditAmount(String(e.amount));
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDesc("");
+    setEditAmount("");
+  }
+
+  async function saveEdit(id: string) {
+    const parsed = parseMoney(editAmount);
+    if (!editDesc.trim() || parsed === null || parsed <= 0) return;
+    setBusy(true);
+    try {
+      await cashRegisterService.updateExpense(id, editDesc, parsed);
+      setEditingId(null);
+      await onRefresh();
+    } catch (error) {
+      notify.error("No se pudo editar el gasto.", error instanceof Error ? error.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await cashRegisterService.deleteExpense(id);
+      await onRefresh();
+    } catch {
+      notify.error("No se pudo eliminar el gasto.");
+    }
+  }
+
+  return (
+    <Box
+      mt="5"
+      bg="white"
+      borderWidth="1px"
+      borderColor="gray.200"
+      borderRadius="md"
+      p="5"
+    >
+      <Flex justify="space-between" align="center" mb="3">
+        <Text fontWeight="bold" fontSize="sm">
+          Gastos de caja
+          {total > 0 ? (
+            <Text as="span" color="red.600" ml="2">
+              -{money(total)}
+            </Text>
+          ) : null}
+        </Text>
+        {!showForm ? (
+          <Button size="xs" variant="outline" onClick={() => setShowForm(true)}>
+            <Plus size={13} />
+            Agregar gasto
+          </Button>
+        ) : null}
+      </Flex>
+      {showForm ? (
+        <Flex gap="2" mb="3" wrap="wrap">
+          <Input
+            flex="1"
+            minW="140px"
+            placeholder="Descripcion (ej. Hielo)"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            size="sm"
+          />
+          <Input
+            w="130px"
+            placeholder="Monto"
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
+            size="sm"
+          />
+          <Button size="sm" colorPalette="purple" loading={busy} onClick={() => void add()}>
+            <Check size={14} />
+            Agregar
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => { setShowForm(false); setDesc(""); setAmount(""); }}>
+            Cancelar
+          </Button>
+        </Flex>
+      ) : null}
+      {expenses.length === 0 ? (
+        <Text color="gray.400" fontSize="sm">
+          Sin gastos registrados en esta caja.
+        </Text>
+      ) : (
+        <Stack gap="1">
+          {expenses.map((e) => (
+            <Box key={e.id}>
+              {editingId === e.id ? (
+                <Flex gap="2" wrap="wrap" align="center">
+                  <Input
+                    flex="1"
+                    minW="140px"
+                    value={editDesc}
+                    onChange={(ev) => setEditDesc(ev.target.value)}
+                    size="sm"
+                    autoFocus
+                  />
+                  <Input
+                    w="130px"
+                    inputMode="decimal"
+                    value={editAmount}
+                    onChange={(ev) => setEditAmount(ev.target.value)}
+                    onKeyDown={(ev) => { if (ev.key === "Enter") void saveEdit(e.id); if (ev.key === "Escape") cancelEdit(); }}
+                    size="sm"
+                  />
+                  <Button size="sm" colorPalette="purple" loading={busy} onClick={() => void saveEdit(e.id)}>
+                    <Check size={14} />
+                    Guardar
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={cancelEdit}>
+                    Cancelar
+                  </Button>
+                </Flex>
+              ) : (
+                <Flex justify="space-between" align="center" gap="3">
+                  <Text fontSize="sm" color="gray.700" flex="1">
+                    {e.description}
+                  </Text>
+                  <Text fontSize="sm" fontWeight="semibold" color="red.600">
+                    -{money(e.amount)}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => startEdit(e)}
+                  >
+                    <Pencil size={13} />
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    colorPalette="red"
+                    onClick={() => void remove(e.id)}
+                  >
+                    <Trash2 size={13} />
+                  </Button>
+                </Flex>
+              )}
+            </Box>
+          ))}
+        </Stack>
+      )}
+    </Box>
+  );
+}
+function CloseDialog({
+  cash,
+  summary,
+  expenses,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  cash: CashSession;
+  summary: CashSummary;
+  expenses: CashExpense[];
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (amount: number, baseAmount?: number) => void;
+}) {
+  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const expectedNet = cash.openingAmount + summary.cash - totalExpenses;
+  const [value, setValue] = useState(String(expectedNet));
+  const [withBase, setWithBase] = useState(false);
+  const [baseValue, setBaseValue] = useState(String(cash.openingAmount));
+  const [error, setError] = useState("");
+
+  const countedAmount = parseMoney(value);
+  const baseAmount = parseMoney(baseValue);
+  const remesa =
+    withBase && countedAmount !== null && baseAmount !== null
+      ? countedAmount - baseAmount
+      : null;
+
+  function submit() {
+    const amount = parseMoney(value);
+    if (amount === null || amount < 0) { setError("Ingresa un monto valido."); return; }
+    if (withBase) {
+      const base = parseMoney(baseValue);
+      if (base === null || base < 0) { setError("Ingresa un monto de base valido."); return; }
+      onConfirm(amount, base);
+    } else {
+      onConfirm(amount);
+    }
+  }
+
+  const detailLines = [
+    `Apertura: ${money(cash.openingAmount)}`,
+    `Efectivo ventas: ${money(summary.cash)}`,
+    ...(totalExpenses > 0 ? [`Gastos: -${money(totalExpenses)}`] : []),
+    `Efectivo neto esperado: ${money(expectedNet)}`,
+    `${summary.saleCount} ventas`,
+  ];
+
+  return (
+    <Modal>
+      <Heading size="md">Cerrar caja</Heading>
+      <Text mt="2" color="gray.500" fontSize="sm">
+        {detailLines.join(" · ")}
+      </Text>
+      <Text mt="6" mb="2" fontWeight="semibold" fontSize="sm">
+        Efectivo fisico contado en caja
+      </Text>
+      <Input
+        autoFocus
+        value={value}
+        inputMode="decimal"
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !withBase) submit(); }}
+      />
+      <Flex mt="4" align="center" gap="2">
+        <input
+          type="checkbox"
+          id="with-base"
+          checked={withBase}
+          onChange={(e) => setWithBase(e.target.checked)}
+        />
+        <Text as="label" htmlFor="with-base" fontSize="sm" cursor="pointer">
+          Dejar base para el siguiente turno
+        </Text>
+      </Flex>
+      {withBase ? (
+        <>
+          <Text mt="3" mb="2" fontWeight="semibold" fontSize="sm">
+            Monto de base a dejar
+          </Text>
+          <Input
+            autoFocus
+            value={baseValue}
+            inputMode="decimal"
+            placeholder="0"
+            onChange={(e) => setBaseValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          />
+          {remesa !== null && (
+            <Text mt="2" fontSize="sm" color="gray.600">
+              Remesa a retirar: <Text as="span" fontWeight="bold" color="green.600">{money(remesa)}</Text>
+            </Text>
+          )}
+        </>
+      ) : null}
+      {error ? (
+        <Text mt="2" color="red.600" fontSize="sm">{error}</Text>
+      ) : null}
+      <Flex mt="6" justify="end" gap="3">
+        <Button variant="outline" disabled={busy} onClick={onClose}>
+          Cancelar
+        </Button>
+        <Button colorPalette="purple" loading={busy} onClick={submit}>
+          <Check size={17} />
+          Confirmar
+        </Button>
+      </Flex>
+    </Modal>
+  );
+}
+function DetailCard({ title, rows }: { title: string; rows: string[][] }) { return <Box mt="5" p="4" bg="gray.50" borderWidth="1px" borderColor="gray.200" borderRadius="md"><Text fontWeight="bold" fontSize="sm" mb="3">{title}</Text><Stack gap="2">{rows.map(([label, value], i) => <Flex key={i} justify="space-between" gap="4"><Text color="gray.600" fontSize="sm">{label}</Text><Text textAlign="right" fontWeight="semibold" fontSize="sm">{value}</Text></Flex>)}</Stack></Box>; }
 function Metric({
   label,
   value,

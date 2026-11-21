@@ -1587,6 +1587,35 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
     }).finally(() => setLoading(false));
   }, [order.id]);
 
+  // WebSocket — recarga si llega TABLE_UPDATED para esta mesa desde otro dispositivo
+  const reloadRef = useRef(reload);
+  useEffect(() => { reloadRef.current = reload; });
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let dead = false;
+
+    function connect() {
+      if (dead) return;
+      ws = new WebSocket('ws://127.0.0.1:8765/ws');
+      ws.onopen = () => console.log('[WS desktop] conectado');
+      ws.onerror = (e) => console.warn('[WS desktop] error', e);
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data as string);
+          console.log('[WS desktop] mensaje', msg);
+          if (msg.type === 'TABLE_UPDATED' && msg.tableId === table.id) {
+            void reloadRef.current();
+          }
+        } catch (_) {}
+      };
+      ws.onclose = (e) => { console.log('[WS desktop] cerrado code=', e.code); if (!dead) setTimeout(connect, 3000); };
+    }
+
+    connect();
+    return () => { dead = true; ws?.close(); };
+  }, [table.id]);
+
   useEffect(() => {
     if (!moreOpen) return;
     const handler = (e: MouseEvent) => {
@@ -1885,6 +1914,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             onItemsChange={() => void reload()}
             onCancel={() => void handleCancelClient(client.id)}
             tableName={table.name}
+            tableId={table.id}
           />
         ))}
 
@@ -1894,7 +1924,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
           if (!unassigned.length) return null;
           return (
             <ClientSection label="Sin cliente asignado" total={unassigned.reduce((s, i) => s + i.subtotal, 0)} colorPalette="gray" defaultOpen>
-              <OrderItemList items={unassigned} allItems={allItems} onItemsChange={() => void reload()} tableName={table.name} />
+              <OrderItemList items={unassigned} allItems={allItems} onItemsChange={() => void reload()} tableName={table.name} tableId={table.id} />
             </ClientSection>
           );
         })()}
@@ -2194,7 +2224,7 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
 }
 
 // ---- ClientCard: un cliente completo con collapse, nombre editable, notas, items, delivery, tarjeta ----
-function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientChange, onItemsChange, onCancel, tableName }: {
+function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientChange, onItemsChange, onCancel, tableName, tableId }: {
   client: TableOrderClient;
   allItems: TableOrderItem[];
   itemsByClient: Map<string, TableOrderItem[]>;
@@ -2203,6 +2233,7 @@ function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientCh
   onItemsChange: () => void;
   onCancel: () => void;
   tableName?: string;
+  tableId?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [nameVal, setNameVal] = useState(client.client_name ?? "");
@@ -2264,7 +2295,7 @@ function ClientCard({ client, allItems, itemsByClient, deliveryTypes, onClientCh
             </Flex>
           ) : (
             <Box mb="3">
-              <OrderItemList items={clientItems} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} />
+              <OrderItemList items={clientItems} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} tableId={tableId} />
             </Box>
           )}
 
@@ -3265,7 +3296,7 @@ function groupKey(item: TableOrderItem, allItems: TableOrderItem[]): string {
   return `${item.product_id ?? item.product_name}|${item.selected_option ?? ""}|${addKey}|${sauceKey}|${childKey}`;
 }
 
-function OrderItemList({ items, allItems, onItemsChange, tableName }: { items: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string }) {
+function OrderItemList({ items, allItems, onItemsChange, tableName, tableId }: { items: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string; tableId?: string }) {
   // Agrupar items por clave — preservando orden de insercion
   const groups = new Map<string, TableOrderItem[]>();
   for (const item of items) {
@@ -3276,7 +3307,7 @@ function OrderItemList({ items, allItems, onItemsChange, tableName }: { items: T
   return (
     <Stack gap="2">
       {[...groups.values()].map((group) => (
-        <OrderItemRow key={group[0].id} group={group} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} />
+        <OrderItemRow key={group[0].id} group={group} allItems={allItems} onItemsChange={onItemsChange} tableName={tableName} tableId={tableId} />
       ))}
     </Stack>
   );
@@ -3285,6 +3316,7 @@ function OrderItemList({ items, allItems, onItemsChange, tableName }: { items: T
 function ComboChildRow({ child, onItemsChange }: { child: TableOrderItem; onItemsChange?: () => void }) {
   const [localAdditions, setLocalAdditions] = useState<{ name: string; quantity: number; price: number }[]>(child.additions);
   const [localSauces, setLocalSauces] = useState<{ name: string }[]>(child.sauces);
+  useEffect(() => { setLocalSauces(child.sauces); }, [child.sauces]);
   const [localOption, setLocalOption] = useState<string | null>(child.selected_option);
   const [allAdditions, setAllAdditions] = useState<PosAddition[]>([]);
   const [allSauces, setAllSauces] = useState<PosSauce[]>([]);
@@ -3298,11 +3330,11 @@ function ComboChildRow({ child, onItemsChange }: { child: TableOrderItem; onItem
 
   useEffect(() => {
     if (!child.product_id) return;
-    posService.products(null).then((prods) => {
+    Promise.all([posService.products(null), posService.sauces()]).then(([prods, { items: activeSauces }]) => {
       const prod = prods.find((p) => p.id === child.product_id);
       if (!prod) return;
       setShowAdditions(prod.showAdditions);
-      setShowSauces(prod.showSauces);
+      setShowSauces(prod.showSauces && activeSauces.length > 0);
       setProductOptions(prod.options);
     });
   }, [child.product_id]);
@@ -3386,7 +3418,7 @@ function ComboChildRow({ child, onItemsChange }: { child: TableOrderItem; onItem
   );
 }
 
-function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string }) {
+function OrderItemRow({ group, allItems, onItemsChange, tableName, tableId }: { group: TableOrderItem[]; allItems: TableOrderItem[]; onItemsChange?: () => void; tableName?: string; tableId?: string }) {
   const item = group[0];
   const totalQty = group.reduce((s, i) => s + i.quantity, 0);
   const totalSub = group.reduce((s, i) => s + i.subtotal, 0);
@@ -3398,6 +3430,7 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
   // Estado local de adiciones/salsas/opcion para reflejar cambios sin recargar todo
   const [localAdditions, setLocalAdditions] = useState<{ name: string; quantity: number; price: number }[]>(item.additions);
   const [localSauces, setLocalSauces] = useState<{ name: string }[]>(item.sauces);
+  useEffect(() => { setLocalSauces(item.sauces); }, [item.sauces]);
   const [localOption, setLocalOption] = useState<string | null>(item.selected_option);
 
   // Listas completas del tenant — se cargan lazy
@@ -3427,12 +3460,12 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
 
   useEffect(() => {
     if (!item.product_id || children.length > 0) return;
-    posService.products(null).then((prods) => {
+    Promise.all([posService.products(null), posService.sauces()]).then(([prods, { items: activeSauces }]) => {
       const prod = prods.find((p) => p.id === item.product_id);
       if (!prod) return;
       setProductOptions(prod.options);
       setShowAdditionsIcon(prod.showAdditions);
-      setShowSaucesIcon(prod.showSauces);
+      setShowSaucesIcon(prod.showSauces && activeSauces.length > 0);
     });
     posService.askSupplies(item.product_id).then((asks) => {
       if (asks.length > 0) {
@@ -3477,6 +3510,7 @@ function OrderItemRow({ group, allItems, onItemsChange, tableName }: { group: Ta
     setLocalSauces(scs.map((s) => ({ name: s.name })));
     setEditMode(null);
     onItemsChange?.();
+    void invoke("broadcast_table_updated", { tableId: tableId ?? '' }).catch(() => {});
   }
 
   async function confirmOption(option: string) {

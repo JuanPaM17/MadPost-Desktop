@@ -62,6 +62,12 @@ struct WsQueryParams { token: Option<String> }
 // Ciclo de vida del servidor
 // ---------------------------------------------------------------------------
 
+pub fn broadcast_table_updated(state: &MobileRuntimeState, table_id: String) {
+    let _ = state.broadcast_tx.send(
+        serde_json::json!({ "type": "TABLE_UPDATED", "tableId": table_id, "orderId": null, "saleId": null }).to_string()
+    );
+}
+
 pub fn start_api(state: &MobileRuntimeState, tenant_id: String, tenant_name: String, tenant_address: String) -> NativeResult {
     let mut api = match state.api.lock() {
         Ok(v) => v,
@@ -220,7 +226,7 @@ pub fn unpublish_mdns(state: &MobileRuntimeState) -> NativeResult {
 fn router(context: ApiContext) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::PUT])
         .allow_headers(Any);
 
     let public = crate::api::auth::public_router()
@@ -263,7 +269,8 @@ async fn websocket(
     Query(params): Query<WsQueryParams>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let token_valid = params.token
+    let from_loopback = address.ip().is_loopback();
+    let token_valid = from_loopback || params.token
         .as_deref()
         .and_then(|t| verify_jwt(t, &context.jwt_secret))
         .is_some();

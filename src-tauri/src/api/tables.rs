@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Extension, Json, Router,
 };
 use rusqlite::{Connection, OptionalExtension};
@@ -21,6 +21,7 @@ pub fn router() -> Router<ApiContext> {
         .route("/api/v1/tables/{id}/order/items", post(add_items))
         .route("/api/v1/tables/{id}/order/items/{item_id}", delete(delete_item))
         .route("/api/v1/tables/{id}/order/items/{item_id}/notes", patch(patch_item_notes))
+        .route("/api/v1/tables/{id}/order/items/{item_id}/sauces", put(put_item_sauces))
         .route("/api/v1/tables/{id}/order/pay", post(pay_order))
         .route("/api/v1/tables/{id}/order/cancel", post(cancel_order))
         .route("/api/v1/tables/{id}/order/delivery", patch(patch_delivery))
@@ -911,6 +912,54 @@ async fn patch_item_notes(
         ).map_err(|e| e.to_string())?;
         Ok::<(), String>(())
     }).await;
+    match result {
+        Ok(Ok(())) => {
+            broadcast(&context, serde_json::json!({ "type": "TABLE_UPDATED", "tableId": table_id_bc, "orderId": null, "saleId": null }));
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Ok(Err(e)) => err500(e).into_response(),
+        Err(_) => err500("Error interno.").into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PUT /tables/{id}/order/items/{item_id}/sauces
+// Reemplaza las salsas de un item existente (DELETE + INSERT).
+// Body: { "sauces": [{ "sauce_id": "...", "sauce_name": "..." }] }
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)] struct PutItemSaucesBody { sauces: Vec<SauceInput> }
+
+async fn put_item_sauces(
+    State(context): State<ApiContext>,
+    Extension(user): Extension<AuthUser>,
+    Path((table_id, item_id)): Path<(String, String)>,
+    Json(body): Json<PutItemSaucesBody>,
+) -> impl IntoResponse {
+    let _ = user;
+    let db_path = context.db_path.clone();
+    let table_id_bc = table_id.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> DbResult<()> {
+        let conn = open_db(&db_path)?;
+        let now = now_iso();
+        conn.execute(
+            "DELETE FROM table_order_item_sauces WHERE table_order_item_id=?1",
+            rusqlite::params![item_id],
+        ).map_err(|e| e.to_string())?;
+        for sauce in &body.sauces {
+            conn.execute(
+                "INSERT INTO table_order_item_sauces(id,table_order_item_id,sauce_id,sauce_name) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![new_uuid(), item_id, sauce.sauce_id, sauce.sauce_name],
+            ).map_err(|e| e.to_string())?;
+        }
+        conn.execute(
+            "UPDATE table_order_items SET updated_at=?1 WHERE id=?2",
+            rusqlite::params![now, item_id],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }).await;
+
     match result {
         Ok(Ok(())) => {
             broadcast(&context, serde_json::json!({ "type": "TABLE_UPDATED", "tableId": table_id_bc, "orderId": null, "saleId": null }));

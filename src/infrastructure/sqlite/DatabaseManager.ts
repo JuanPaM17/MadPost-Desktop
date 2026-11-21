@@ -234,6 +234,15 @@ const migrations = [
     cash_opened_at  TEXT,
     cash_closed_at  TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS cash_expenses (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
+    cash_session_id TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    amount          REAL NOT NULL,
+    created_at      TEXT NOT NULL,
+    created_by      TEXT
+  )`,
 ];
 
 const PROD_DB = "sqlite:madpost.db";
@@ -373,6 +382,7 @@ class DatabaseManager {
     await this.ensureColumn(database, "product_supplies", "deduct_mode", "TEXT NOT NULL DEFAULT 'always'");
     await this.ensureColumn(database, "stock_logs", "reason", "TEXT");
     await this.ensureColumn(database, "table_order_items", "skipped_supplies", "TEXT");
+    await this.ensureColumn(database, "cash_sessions", "base_amount", "REAL");
     await database.execute("DROP TABLE IF EXISTS addition_supplies");
     await this.dropRoleCheckConstraint(database);
     return database;

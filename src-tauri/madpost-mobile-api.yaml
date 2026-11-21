@@ -1,0 +1,1952 @@
+openapi: 3.1.0
+info:
+  title: MadPost Mobile API
+  description: |
+    API embebida en la app desktop MadPost (servidor Axum/Rust corriendo en la maquina del negocio).
+    La app mobile se conecta via LAN a `http://{ip}:{port}` (puerto por defecto 8765).
+
+    ## Autenticacion
+    Todos los endpoints protegidos requieren dos headers:
+    - `Authorization: Bearer <jwt>` — token obtenido en `/auth/login`
+    - `X-Device-Id: <uuid>` — identificador unico del dispositivo movil (generado una sola vez y persistido)
+
+    Los endpoints publicos (ping, login, device-status) NO requieren headers de auth.
+
+    ## WebSocket
+    `ws://{ip}:{port}/ws` — eventos en tiempo real. Tipos de evento:
+    - `ORDER_ITEM_ADDED` — se agrego un item a una orden de mesa
+    - `TABLE_UPDATED`    — cambio general en una mesa (salsas, notas, delivery, etc.)
+    - `ORDER_OPENED`     — se abrio una orden en una mesa
+    - `ORDER_CLOSED`     — se cerro/cobro una orden de mesa
+  version: "1.9.0"
+  contact:
+    name: MadPost
+
+servers:
+  - url: "http://{ip}:{port}"
+    description: Servidor local del negocio (LAN)
+    variables:
+      ip:
+        default: "192.168.1.100"
+        description: IP local de la maquina desktop donde corre MadPost
+      port:
+        default: "8765"
+        description: Puerto del servidor embebido
+
+# ---------------------------------------------------------------------------
+# Security schemes
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    DeviceId:
+      type: apiKey
+      in: header
+      name: X-Device-Id
+
+  schemas:
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    # Auth
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: "admin"
+        password:
+          type: string
+          example: "1234"
+        deviceId:
+          type: string
+          description: UUID unico del dispositivo. Si se omite, no pasa validacion de dispositivo.
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        userId:
+          type: string
+        username:
+          type: string
+        displayName:
+          type: string
+        role:
+          type: string
+          enum: [ADMIN, SUPERADMIN, MANAGER, SELLER, WAITER]
+        tenantId:
+          type: string
+
+    LoginRequiresApproval:
+      type: object
+      properties:
+        requiresApproval:
+          type: boolean
+          example: true
+
+    # Devices
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+        alias:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, revoked]
+        last_ip:
+          type: string
+          nullable: true
+        last_seen_at:
+          type: string
+          nullable: true
+        registered_at:
+          type: string
+
+    # Cash
+    CashSessionCurrent:
+      type: object
+      properties:
+        open:
+          type: boolean
+        id:
+          type: string
+        sessionNumber:
+          type: integer
+        openedAt:
+          type: string
+
+    # Catalog
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        showAdditions:
+          type: boolean
+        showSauces:
+          type: boolean
+        sortOrder:
+          type: integer
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        categoryId:
+          type: string
+        categoryName:
+          type: string
+        price:
+          type: number
+        active:
+          type: boolean
+        description:
+          type: string
+          nullable: true
+        stock:
+          type: number
+          nullable: true
+        stockMode:
+          type: string
+          enum: [direct, supplies, infinite]
+        options:
+          type: array
+          items:
+            type: string
+        supplies:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              unit:
+                type: string
+              stock:
+                type: number
+                nullable: true
+              quantityPerSale:
+                type: number
+
+    Addition:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: number
+        stock:
+          type: number
+          nullable: true
+        active:
+          type: boolean
+
+    Sauce:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        active:
+          type: boolean
+
+    ComboItem:
+      type: object
+      properties:
+        productId:
+          type: string
+        productName:
+          type: string
+        quantity:
+          type: number
+        showAdditions:
+          type: boolean
+        showSauces:
+          type: boolean
+
+    Combo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: number
+        active:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboItem"
+
+    # Config
+    DeliveryType:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: number
+        sortOrder:
+          type: integer
+
+    # Tables
+    TableElement:
+      type: object
+      description: Elemento decorativo del salon (pared, barra, etc.)
+      properties:
+        id:
+          type: string
+        floor:
+          type: integer
+        posX:
+          type: number
+        posY:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        color:
+          type: string
+          nullable: true
+
+    Table:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        floor:
+          type: integer
+        posX:
+          type: number
+        posY:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        shape:
+          type: string
+          enum: [RECT, ROUND]
+        status:
+          type: string
+          enum: [FREE, OPEN]
+        activeOrderId:
+          type: string
+          nullable: true
+        openedAt:
+          type: string
+          nullable: true
+        hasComanda:
+          type: boolean
+        clientNames:
+          type: array
+          items:
+            type: string
+        total:
+          type: number
+
+    FloorPlanResponse:
+      type: object
+      properties:
+        floors:
+          type: array
+          items:
+            type: integer
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Table"
+        elements:
+          type: array
+          items:
+            $ref: "#/components/schemas/TableElement"
+
+    OrderItemSauce:
+      type: object
+      properties:
+        sauceId:
+          type: string
+          nullable: true
+        sauceName:
+          type: string
+
+    OrderItemAddition:
+      type: object
+      properties:
+        additionId:
+          type: string
+          nullable: true
+        additionName:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: number
+
+    OrderItem:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+          nullable: true
+        productName:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        originalUnitPrice:
+          type: number
+        subtotal:
+          type: number
+        hasDiscount:
+          type: boolean
+        selectedOption:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        comboParentItemId:
+          type: string
+          nullable: true
+        additions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemAddition"
+        sauces:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemSauce"
+        productCapabilities:
+          type: object
+          properties:
+            showAdditions:
+              type: boolean
+            showSauces:
+              type: boolean
+            options:
+              type: array
+              items:
+                type: string
+            hasAskSupplies:
+              type: boolean
+
+    OrderClient:
+      type: object
+      properties:
+        id:
+          type: string
+        clientNumber:
+          type: integer
+        clientName:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        total:
+          type: number
+        isDelivery:
+          type: boolean
+        deliveryTypeId:
+          type: string
+          nullable: true
+        deliveryTypeName:
+          type: string
+          nullable: true
+        deliveryPrice:
+          type: number
+        isCard:
+          type: boolean
+        status:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        tableId:
+          type: string
+        openedAt:
+          type: string
+        comandaSent:
+          type: boolean
+        total:
+          type: number
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderClient"
+
+    # Sales
+    SaleItem:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+          nullable: true
+        productName:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        subtotal:
+          type: number
+        selectedOption:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        additions:
+          type: array
+          items:
+            type: string
+        sauces:
+          type: array
+          items:
+            type: string
+
+    Sale:
+      type: object
+      properties:
+        id:
+          type: string
+        saleNumber:
+          type: integer
+        createdAt:
+          type: string
+        paymentMethod:
+          type: string
+        total:
+          type: number
+        cashGiven:
+          type: number
+          nullable: true
+        change:
+          type: number
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        clientName:
+          type: string
+          nullable: true
+        attendedBy:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SaleItem"
+
+    # Dashboard
+    DashboardSummary:
+      type: object
+      properties:
+        cashSession:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+            sessionNumber:
+              type: integer
+            openedBy:
+              type: string
+        activeProducts:
+          type: integer
+        todaySales:
+          type: integer
+        todayRevenue:
+          type: number
+        openTables:
+          type: integer
+
+# ---------------------------------------------------------------------------
+# Security global (aplica a todos salvo los que lo sobreescriben)
+# ---------------------------------------------------------------------------
+security:
+  - BearerAuth: []
+    DeviceId: []
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ── Auth ────────────────────────────────────────────────────────────────────
+
+  /api/v1/auth/ping:
+    get:
+      tags: [Auth]
+      summary: Health check del servidor
+      description: Publico. Retorna version del servidor. Util para verificar conectividad antes de login.
+      security: []
+      responses:
+        "200":
+          description: Servidor activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  version:
+                    type: string
+                    example: "1.9.0-beta.1"
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesion
+      description: |
+        Publico. Autentica al usuario y retorna el JWT.
+
+        Si se envia `deviceId`:
+        - Si el dispositivo no existe, se registra como `pending` y retorna `{ requiresApproval: true }` (HTTP 202).
+        - Si esta `pending`, retorna `{ requiresApproval: true }` (HTTP 202).
+        - Si esta `revoked`, retorna 403.
+        - Si esta `approved`, continua con el login normal.
+
+        Si NO se envia `deviceId`, omite la validacion de dispositivo y retorna el JWT directamente si las credenciales son correctas.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "202":
+          description: Dispositivo pendiente de aprobacion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginRequiresApproval"
+        "401":
+          description: Credenciales incorrectas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Dispositivo revocado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/device-status:
+    get:
+      tags: [Auth]
+      summary: Consultar estado de un dispositivo
+      description: Publico. Retorna el estado del dispositivo sin requerir JWT. Usar para polling mientras espera aprobacion.
+      security: []
+      parameters:
+        - name: deviceId
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        "200":
+          description: Estado del dispositivo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [pending, approved, revoked, unknown]
+
+  /api/v1/auth/profile:
+    get:
+      tags: [Auth]
+      summary: Obtener perfil del usuario autenticado
+      responses:
+        "200":
+          description: Perfil del usuario
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  displayName:
+                    type: string
+                  role:
+                    type: string
+    patch:
+      tags: [Auth]
+      summary: Actualizar perfil
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                username:
+                  type: string
+                currentPassword:
+                  type: string
+                  description: Requerido solo si se quiere cambiar la contrasena
+                newPassword:
+                  type: string
+                  minLength: 4
+      responses:
+        "200":
+          description: Perfil actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  displayName:
+                    type: string
+        "422":
+          description: Contrasena actual incorrecta u otro error de validacion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Devices ─────────────────────────────────────────────────────────────────
+
+  /api/v1/devices:
+    get:
+      tags: [Devices]
+      summary: Listar dispositivos moviles registrados
+      description: Solo ADMIN / SUPERADMIN.
+      responses:
+        "200":
+          description: Lista de dispositivos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Device"
+        "403":
+          description: Sin permiso
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/devices/{id}:
+    patch:
+      tags: [Devices]
+      summary: Actualizar alias o estado de un dispositivo
+      description: Solo ADMIN / SUPERADMIN. Estados validos — `approved`, `revoked`, `pending`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias:
+                  type: string
+                status:
+                  type: string
+                  enum: [approved, revoked, pending]
+      responses:
+        "200":
+          description: Actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "422":
+          description: Status invalido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Devices]
+      summary: Eliminar un dispositivo
+      description: Solo ADMIN / SUPERADMIN.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Eliminado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  # ── Cash ────────────────────────────────────────────────────────────────────
+
+  /api/v1/cash/session/current:
+    get:
+      tags: [Caja]
+      summary: Estado de la caja actual
+      description: Retorna si hay una caja abierta y sus datos basicos.
+      responses:
+        "200":
+          description: Estado de la caja
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashSessionCurrent"
+              examples:
+                abierta:
+                  value:
+                    open: true
+                    id: "uuid-caja"
+                    sessionNumber: 42
+                    openedAt: "2025-11-20T08:00:00Z"
+                cerrada:
+                  value:
+                    open: false
+
+  # ── Config ──────────────────────────────────────────────────────────────────
+
+  /api/v1/config/max-sauces:
+    get:
+      tags: [Config]
+      summary: Limite de salsas por item configurado en el tenant
+      responses:
+        "200":
+          description: Maximo de salsas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  maxSauces:
+                    type: integer
+                    example: 3
+
+  /api/v1/config/delivery-types:
+    get:
+      tags: [Config]
+      summary: Tipos de domicilio configurados
+      responses:
+        "200":
+          description: Lista de tipos de domicilio
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliveryType"
+
+  # ── Catalog ─────────────────────────────────────────────────────────────────
+
+  /api/v1/catalog/categories:
+    get:
+      tags: [Catalogo]
+      summary: Listar categorias activas
+      responses:
+        "200":
+          description: Categorias
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+
+  /api/v1/catalog/products:
+    get:
+      tags: [Catalogo]
+      summary: Listar productos
+      description: Incluye opciones e insumos por producto. No filtra por `active` — retorna todos y expone el campo.
+      responses:
+        "200":
+          description: Productos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+
+  /api/v1/catalog/additions:
+    get:
+      tags: [Catalogo]
+      summary: Listar adiciones activas
+      responses:
+        "200":
+          description: Adiciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Addition"
+
+  /api/v1/catalog/sauces:
+    get:
+      tags: [Catalogo]
+      summary: Listar salsas activas
+      description: Solo retorna salsas con `active=1`. Usar junto con `/config/max-sauces` para mostrar el picker.
+      responses:
+        "200":
+          description: Salsas activas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Sauce"
+
+  /api/v1/catalog/combos:
+    get:
+      tags: [Catalogo]
+      summary: Listar combos con sus items
+      responses:
+        "200":
+          description: Combos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Combo"
+
+  # ── Dashboard ───────────────────────────────────────────────────────────────
+
+  /api/v1/dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Resumen del negocio para la pantalla de inicio
+      responses:
+        "200":
+          description: Resumen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  # ── Tables ──────────────────────────────────────────────────────────────────
+
+  /api/v1/tables/floor-plan:
+    get:
+      tags: [Mesas]
+      summary: Plano del salon con todas las mesas y elementos decorativos
+      description: Retorna pisos disponibles, mesas con estado en tiempo real y elementos decorativos por piso.
+      responses:
+        "200":
+          description: Plano del salon
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloorPlanResponse"
+
+  /api/v1/tables:
+    get:
+      tags: [Mesas]
+      summary: Listar mesas (sin posicion, solo datos basicos)
+      responses:
+        "200":
+          description: Mesas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Table"
+
+  /api/v1/tables/{id}:
+    get:
+      tags: [Mesas]
+      summary: Obtener una mesa por ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mesa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Table"
+
+  /api/v1/tables/{id}/order:
+    get:
+      tags: [Mesas]
+      summary: Obtener la orden abierta de una mesa con todos sus clientes e items
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Orden con clientes e items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order:
+                    $ref: "#/components/schemas/Order"
+        "404":
+          description: Mesa sin orden abierta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Mesas]
+      summary: Abrir una mesa (crear orden)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_name:
+                  type: string
+                  description: Nombre del primer cliente (opcional)
+      responses:
+        "201":
+          description: Orden creada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: string
+                  clientId:
+                    type: string
+        "409":
+          description: La mesa ya tiene una orden abierta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tables/{id}/order/clients:
+    post:
+      tags: [Mesas]
+      summary: Agregar un cliente a la orden
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_name:
+                  type: string
+      responses:
+        "201":
+          description: Cliente agregado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clientId:
+                    type: string
+                  clientNumber:
+                    type: integer
+
+  /api/v1/tables/{id}/order/items:
+    post:
+      tags: [Mesas]
+      summary: Agregar items a la orden
+      description: |
+        Agrega uno o mas items a un cliente de la orden. Si no se envia `client_id`, se usa el primer cliente activo.
+        Los items de combo deben referenciarse entre si via `combo_parent_item_id` usando el `id` temporal del item padre en el array.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                client_id:
+                  type: string
+                  nullable: true
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [product_name, unit_price, quantity]
+                    properties:
+                      product_id:
+                        type: string
+                        nullable: true
+                      product_name:
+                        type: string
+                      unit_price:
+                        type: number
+                      quantity:
+                        type: number
+                      selected_option:
+                        type: string
+                        nullable: true
+                      notes:
+                        type: string
+                        nullable: true
+                      combo_id:
+                        type: string
+                        nullable: true
+                      combo_parent_item_id:
+                        type: string
+                        nullable: true
+                        description: ID temporal del item padre en este mismo array (para combos)
+                      additions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            addition_id:
+                              type: string
+                              nullable: true
+                            addition_name:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: number
+                      sauces:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            sauce_id:
+                              type: string
+                              nullable: true
+                            sauce_name:
+                              type: string
+            example:
+              client_id: "uuid-cliente"
+              items:
+                - product_id: "uuid-producto"
+                  product_name: "Hamburguesa"
+                  unit_price: 15000
+                  quantity: 1
+                  sauces:
+                    - sauce_id: "uuid-salsa"
+                      sauce_name: "BBQ"
+      responses:
+        "200":
+          description: Items agregados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: integer
+        "409":
+          description: Mesa sin orden abierta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tables/{id}/order/items/{item_id}:
+    delete:
+      tags: [Mesas]
+      summary: Eliminar un item de la orden
+      description: Si el item es padre de combo, tambien elimina sus hijos.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Item eliminado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/items/{item_id}/notes:
+    patch:
+      tags: [Mesas]
+      summary: Actualizar nota de un item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Nota actualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/items/{item_id}/sauces:
+    put:
+      tags: [Mesas]
+      summary: Reemplazar salsas de un item existente
+      description: |
+        Elimina todas las salsas actuales del item e inserta las nuevas.
+        Enviar array vacio para quitar todas las salsas.
+        Emite evento WebSocket `TABLE_UPDATED`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sauces]
+              properties:
+                sauces:
+                  type: array
+                  items:
+                    type: object
+                    required: [sauce_name]
+                    properties:
+                      sauce_id:
+                        type: string
+                        nullable: true
+                      sauce_name:
+                        type: string
+            example:
+              sauces:
+                - sauce_id: "uuid-salsa-1"
+                  sauce_name: "BBQ"
+                - sauce_id: "uuid-salsa-2"
+                  sauce_name: "Pico de gallo"
+      responses:
+        "200":
+          description: Salsas actualizadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/pay:
+    post:
+      tags: [Mesas]
+      summary: Cobrar la orden (o un cliente especifico)
+      description: |
+        Si se omite `client_id`, cobra toda la mesa. Si se envia, cobra solo ese cliente.
+        Metodos de pago validos: `CASH`, `CARD`, `MIXED`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_method]
+              properties:
+                client_id:
+                  type: string
+                  nullable: true
+                payment_method:
+                  type: string
+                  enum: [CASH, CARD, MIXED]
+                cash_given:
+                  type: number
+                  nullable: true
+                cash_amount:
+                  type: number
+                  nullable: true
+                card_amount:
+                  type: number
+                  nullable: true
+                delivery_type_id:
+                  type: string
+                  nullable: true
+                client_name:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Cobro realizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saleId:
+                    type: string
+
+  /api/v1/tables/{id}/order/cancel:
+    post:
+      tags: [Mesas]
+      summary: Cancelar la orden completa (cerrar mesa sin cobrar)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Orden cancelada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/delivery:
+    patch:
+      tags: [Mesas]
+      summary: Asignar o quitar tipo de domicilio a un cliente
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id]
+              properties:
+                client_id:
+                  type: string
+                delivery_type_id:
+                  type: string
+                  nullable: true
+                  description: null para quitar el domicilio
+      responses:
+        "200":
+          description: Domicilio actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/card:
+    patch:
+      tags: [Mesas]
+      summary: Marcar o desmarcar pago con tarjeta para un cliente
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id, is_card]
+              properties:
+                client_id:
+                  type: string
+                is_card:
+                  type: boolean
+      responses:
+        "200":
+          description: Actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/clients/{client_id}/name:
+    patch:
+      tags: [Mesas]
+      summary: Actualizar nombre de un cliente
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_name:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Nombre actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/clients/{client_id}/notes:
+    patch:
+      tags: [Mesas]
+      summary: Actualizar notas generales de un cliente
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Notas actualizadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/clients/{client_id}:
+    delete:
+      tags: [Mesas]
+      summary: Cancelar (eliminar) un cliente de la orden
+      description: Elimina el cliente y todos sus items. Si era el ultimo cliente activo, cierra la orden completa.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cliente cancelado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/transfer/items:
+    post:
+      tags: [Mesas]
+      summary: Transferir items a otra mesa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dest_table_id, item_ids]
+              properties:
+                dest_table_id:
+                  type: string
+                item_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Items transferidos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/transfer/client:
+    post:
+      tags: [Mesas]
+      summary: Transferir un cliente completo a otra mesa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dest_table_id, client_id]
+              properties:
+                dest_table_id:
+                  type: string
+                client_id:
+                  type: string
+      responses:
+        "200":
+          description: Cliente transferido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/comanda:
+    post:
+      tags: [Mesas]
+      summary: Enviar comanda a cocina
+      description: Genera e imprime la comanda. Si se envia `client_id`, solo manda los items de ese cliente.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_id:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Comanda enviada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/comandas:
+    get:
+      tags: [Mesas]
+      summary: Listar comandas enviadas para la orden activa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Comandas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    sentAt:
+                      type: string
+                    items:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          productName:
+                            type: string
+                          quantity:
+                            type: number
+                          notes:
+                            type: string
+                            nullable: true
+
+  /api/v1/tables/{id}/order/comandas/{comanda_id}/reprint:
+    post:
+      tags: [Mesas]
+      summary: Reimprimir una comanda
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: comanda_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reimpresa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/order/receipts:
+    get:
+      tags: [Mesas]
+      summary: Listar recibos/ventas de la orden activa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Recibos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    saleId:
+                      type: string
+                    saleNumber:
+                      type: integer
+                    paidAt:
+                      type: string
+                    total:
+                      type: number
+                    paymentMethod:
+                      type: string
+
+  /api/v1/tables/{id}/order/receipts/{sale_id}/print:
+    post:
+      tags: [Mesas]
+      summary: Reimprimir recibo de una venta de mesa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sale_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Impreso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/v1/tables/{id}/history:
+    get:
+      tags: [Mesas]
+      summary: Historial de ordenes cerradas de una mesa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Historial de ordenes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    openedAt:
+                      type: string
+                    closedAt:
+                      type: string
+                    total:
+                      type: number
+                    sales:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/Sale"
+
+  # ── Sales ───────────────────────────────────────────────────────────────────
+
+  /api/v1/sales:
+    get:
+      tags: [Ventas]
+      summary: Listar ventas
+      description: |
+        Filtros via query param `filter`:
+        - `attended` (default) — ventas creadas por el usuario autenticado
+        - `collected` — ventas cobradas por el usuario autenticado
+        - `all` — todas las ventas (SELLER lo ignora y ve `attended`)
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [attended, collected, all]
+            default: attended
+      responses:
+        "200":
+          description: Ventas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Sale"
+    post:
+      tags: [Ventas]
+      summary: Crear una venta directa (POS sin mesa)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [total, items]
+              properties:
+                paymentMethod:
+                  type: string
+                  enum: [CASH, CARD, MIXED]
+                  default: CASH
+                total:
+                  type: number
+                cashGiven:
+                  type: number
+                  nullable: true
+                cashAmount:
+                  type: number
+                  nullable: true
+                cardAmount:
+                  type: number
+                  nullable: true
+                deliveryTypeId:
+                  type: string
+                  nullable: true
+                isDelivery:
+                  type: boolean
+                  nullable: true
+                deliveryFee:
+                  type: number
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                clientName:
+                  type: string
+                  nullable: true
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [productName, unitPrice, quantity]
+                    properties:
+                      productId:
+                        type: string
+                        nullable: true
+                      productName:
+                        type: string
+                      unitPrice:
+                        type: number
+                      quantity:
+                        type: number
+                      selectedOption:
+                        type: string
+                        nullable: true
+                      notes:
+                        type: string
+                        nullable: true
+                      additions:
+                        type: array
+                        items:
+                          type: object
+                      sauces:
+                        type: array
+                        items:
+                          type: string
+                          description: ID de la salsa
+      responses:
+        "201":
+          description: Venta creada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saleId:
+                    type: string
+                  saleNumber:
+                    type: integer
+
+  /api/v1/sales/{id}:
+    get:
+      tags: [Ventas]
+      summary: Obtener detalle de una venta
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Venta completa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sale"
+        "404":
+          description: Venta no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── WebSocket ───────────────────────────────────────────────────────────────
+
+  /ws:
+    get:
+      tags: [WebSocket]
+      summary: Conexion WebSocket para eventos en tiempo real
+      description: |
+        Upgrade a WebSocket. No requiere autenticacion de momento.
+
+        Cada mensaje es un JSON con la siguiente estructura:
+        ```json
+        { "type": "EVENT_TYPE", "tableId": "uuid|null", "orderId": "uuid|null", "saleId": "uuid|null" }
+        ```
+
+        Tipos de evento:
+        - `ORDER_ITEM_ADDED` — se agrego un item a una orden de mesa
+        - `TABLE_UPDATED`    — cambio en salsas, notas, delivery, card de un item/cliente
+        - `ORDER_OPENED`     — se abrio una nueva orden en una mesa
+        - `ORDER_CLOSED`     — se cerro/cobro una orden
+      responses:
+        "101":
+          description: Switching Protocols — conexion WebSocket establecida

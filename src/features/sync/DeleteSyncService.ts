@@ -7,6 +7,7 @@ import type { SyncRuntimeContext } from "./SyncService";
 const rpcByTable: Record<string, { name: string; parameter: string }> = {
   sales: { name: "delete_sale", parameter: "p_sale_id" },
   cash_sessions: { name: "delete_cash_session", parameter: "p_session_id" },
+  cash_expenses: { name: "delete_cash_expense", parameter: "p_expense_id" },
   users: { name: "delete_user", parameter: "p_user_id" },
   categories: { name: "delete_category", parameter: "p_category_id" },
   additions: { name: "delete_addition", parameter: "p_addition_id" },
