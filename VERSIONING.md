@@ -340,6 +340,25 @@ gh release create vX.Y.Z "src-tauri/target/release/bundle/nsis/MadPost Desktop_X
 
 ## Historial de versiones
 
+### v1.10.0 — Gastos de caja, descuentos masivos y mejoras en historial e inventario
+
+**Nuevo:**
+- Puedes registrar gastos directamente desde la caja abierta: agrega una descripcion y el monto, y quedan descontados del total al cerrar el turno.
+- Al cerrar caja, ahora ves un resumen completo del cierre antes de confirmar: efectivo esperado, gastos descontados, efectivo real contado, base dejada y remesa a retirar, todo en tiempo real mientras ingresas los valores.
+- En el catalogo de descuentos, puedes crear un descuento y aplicarlo a varios productos de una vez desde un nuevo boton "Descuento masivo". Filtra por categoria o busca por nombre, selecciona los que quieras y configura el descuento una sola vez para todos.
+- El historial de descuentos ahora muestra el precio original del producto junto al valor del descuento y el precio final, para comparar de un vistazo.
+
+**Mejorado:**
+- En la pantalla de caja, puedes filtrar el historial de turnos por cajero y por rango de fechas.
+- En el historial de pedidos, puedes filtrar entre ventas de salon y domicilios por separado.
+- Al separar la cuenta de una mesa por persona, los productos con mas de una unidad se dividen individualmente para poder asignarlos a diferentes clientes con mayor precision.
+- Desde el detalle de una venta en el historial, si un insumo estaba configurado para preguntar al momento de vender, puedes corregir si se descontó o no del inventario, siempre que la venta sea de menos de 24 horas.
+- Los filtros de fecha en el historial de inventario y en el historial de pedidos ahora funcionan correctamente y muestran los registros del rango seleccionado.
+- Los videos de ayuda en el centro de ayuda ya no aparecian aunque estuvieran disponibles. Ahora se muestran correctamente.
+- Al crear o editar productos, adiciones y combos, los precios escritos con punto de miles (por ejemplo, 30.000) se guardan correctamente como treinta mil, sin importar si se uso punto o coma como separador.
+
+---
+
 ### v1.9.0 — Flujo de pedidos mas rapido, administracion de usuarios y mejoras generales
 
 **Nuevo:**

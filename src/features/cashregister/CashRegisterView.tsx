@@ -13,6 +13,8 @@ import {
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronUp,
   CircleDollarSign,
   Download,
   FileText,
@@ -706,16 +708,12 @@ function CashDetailDialog({
           ]}
         />
       ) : null}
-      <DetailCard
-        title="Cierre"
-        rows={[
-          ["Efectivo esperado", money(cash.expectedAmount ?? 0)],
-          ...(expenses.length > 0 ? [["(Gastos descontados)", `-${money(totalExpenses)}`]] : []),
-          ["Efectivo real", money(cash.closingAmount ?? 0)],
-          ...(cash.baseAmount !== null ? [["Base dejada", money(cash.baseAmount)]] : []),
-          ...(cash.baseAmount !== null ? [["Remesa retirada", money((cash.closingAmount ?? 0) - cash.baseAmount)]] : []),
-          ["Diferencia", `${difference > 0 ? "+" : ""}${money(difference)}`],
-        ]}
+      <CashClosePreview
+        expectedNet={cash.expectedAmount ?? 0}
+        totalExpenses={totalExpenses}
+        countedAmount={cash.closingAmount}
+        baseAmount={cash.baseAmount}
+        defaultOpen={true}
       />
       <Flex mt="7" justify="space-between" gap="3">
         <Button
@@ -1019,6 +1017,12 @@ function CloseDialog({
           )}
         </>
       ) : null}
+      <CashClosePreview
+        expectedNet={expectedNet}
+        totalExpenses={totalExpenses}
+        countedAmount={countedAmount}
+        baseAmount={withBase ? baseAmount : null}
+      />
       {error ? (
         <Text mt="2" color="red.600" fontSize="sm">{error}</Text>
       ) : null}
@@ -1032,6 +1036,38 @@ function CloseDialog({
         </Button>
       </Flex>
     </Modal>
+  );
+}
+function CashClosePreview({ expectedNet, totalExpenses, countedAmount, baseAmount, defaultOpen = false }: { expectedNet: number; totalExpenses: number; countedAmount: number | null; baseAmount: number | null; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (countedAmount === null) return null;
+  const difference = countedAmount - expectedNet;
+  const remesa = baseAmount !== null ? countedAmount - baseAmount : null;
+  const rows: [string, string, string?][] = [
+    ["Efectivo esperado", money(expectedNet)],
+    ...(totalExpenses > 0 ? [["(Gastos descontados)", `-${money(totalExpenses)}`] as [string, string]] : []),
+    ["Efectivo real", money(countedAmount)],
+    ...(baseAmount !== null ? [["Base dejada", money(baseAmount)] as [string, string]] : []),
+    ...(remesa !== null ? [["Remesa retirada", money(remesa)] as [string, string]] : []),
+    ["Diferencia", `${difference > 0 ? "+" : ""}${money(difference)}`, difference < 0 ? "red" : difference > 0 ? "green" : "gray"] as [string, string, string],
+  ];
+  return (
+    <Box mt="4" borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden">
+      <Flex px="3" py="2" bg="gray.50" align="center" justify="space-between" cursor="pointer" onClick={() => setOpen((v) => !v)}>
+        <Text fontWeight="semibold" fontSize="sm">Cierre</Text>
+        {open ? <ChevronUp size={15} color="#6b7280" /> : <ChevronDown size={15} color="#6b7280" />}
+      </Flex>
+      {open ? (
+        <Stack gap="2" px="3" py="3">
+          {rows.map(([label, value, color], i) => (
+            <Flex key={i} justify="space-between" gap="4">
+              <Text color="gray.600" fontSize="sm">{label}</Text>
+              <Text textAlign="right" fontWeight="semibold" fontSize="sm" color={color === "red" ? "red.600" : color === "green" ? "green.600" : undefined}>{value}</Text>
+            </Flex>
+          ))}
+        </Stack>
+      ) : null}
+    </Box>
   );
 }
 function DetailCard({ title, rows }: { title: string; rows: string[][] }) { return <Box mt="5" p="4" bg="gray.50" borderWidth="1px" borderColor="gray.200" borderRadius="md"><Text fontWeight="bold" fontSize="sm" mb="3">{title}</Text><Stack gap="2">{rows.map(([label, value], i) => <Flex key={i} justify="space-between" gap="4"><Text color="gray.600" fontSize="sm">{label}</Text><Text textAlign="right" fontWeight="semibold" fontSize="sm">{value}</Text></Flex>)}</Stack></Box>; }

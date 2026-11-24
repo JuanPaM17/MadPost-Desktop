@@ -958,7 +958,7 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
 // SaleStockLogs
 // ---------------------------------------------------------------------------
 type StockLogRow = { id: string; item_type: string; item_name: string; delta: number; stock_before: number | null; stock_after: number | null; created_at: string; reason: string | null };
-type SaleItemSupplyRow = { sale_item_id: string; supply_id: string; deducted: number; quantity_deducted: number; deduct_mode: string };
+type SaleItemSupplyRow = { sale_item_id: string; supply_id: string; deducted: number; quantity_deducted: number; deduct_mode: string; product_name: string | null };
 
 const RETRO_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -982,7 +982,8 @@ function SaleStockLogs({ invoiceNumber, saleId, saleCreatedAt }: { invoiceNumber
       ),
       db.select<SaleItemSupplyRow[]>(
         `SELECT sis.sale_item_id, sis.supply_id, sis.deducted, sis.quantity_deducted,
-                COALESCE(ps.deduct_mode, 'always') AS deduct_mode
+                COALESCE(ps.deduct_mode, 'always') AS deduct_mode,
+                si.product_name
          FROM sale_item_supplies sis
          JOIN sale_items si ON si.id = sis.sale_item_id
          LEFT JOIN product_supplies ps ON ps.supply_id = sis.supply_id AND ps.product_id = si.product_id
@@ -999,8 +1000,9 @@ function SaleStockLogs({ invoiceNumber, saleId, saleCreatedAt }: { invoiceNumber
     void loadData().catch(() => {}).finally(() => setLoading(false));
   }, [invoiceNumber, saleId]);
 
-  async function handleToggle(supplyId: string, currentlyDeducted: boolean) {
-    setToggling(supplyId);
+  async function handleToggle(saleItemId: string, supplyId: string, currentlyDeducted: boolean) {
+    const toggleKey = `${saleItemId}:${supplyId}`;
+    setToggling(toggleKey);
     try {
       const db = await databaseManager.database();
       const session = sessionContext.current();
@@ -1009,19 +1011,21 @@ function SaleStockLogs({ invoiceNumber, saleId, saleCreatedAt }: { invoiceNumber
       const userName = session?.user.display_name || session?.user.username || "";
       const now = new Date().toISOString();
 
-      // El link de este supply
-      const link = supplyLinks.find((l) => l.supply_id === supplyId && l.deducted === (currentlyDeducted ? 1 : 0));
+      // El link especifico de este sale_item + supply
+      const link = supplyLinks.find((l) => l.sale_item_id === saleItemId && l.supply_id === supplyId);
       if (!link) return;
       const qty = Number(link.quantity_deducted);
+      const productName = link.product_name ?? "";
 
-      // Buscar el log del supply por supply_id directamente
+      // Buscar el log original de este sale_item+supply: el item_name tiene formato "Supply (Product) [Factura X]"
       const originalLogFull = await db.select<{ id: string; item_name: string; delta: number; stock_before: number; stock_after: number }[]>(
         `SELECT id, item_name, delta, stock_before, stock_after FROM stock_logs
          WHERE item_name LIKE $1 AND item_type='SUPPLY' AND item_id=$2
            AND (reason IS NULL OR reason='SKIP')
            AND item_name NOT LIKE '%[Ajuste retro%'
+           AND item_name LIKE $3
          LIMIT 1`,
-        [`%[Factura ${invoiceNumber}]%`, supplyId],
+        [`%[Factura ${invoiceNumber}]%`, supplyId, `%(${productName})%`],
       );
       if (!originalLogFull.length) return;
       const origLog = originalLogFull[0];
@@ -1158,26 +1162,20 @@ function SaleStockLogs({ invoiceNumber, saleId, saleCreatedAt }: { invoiceNumber
 type EditableSuppliesPanelProps = {
   supplyLinks: SaleItemSupplyRow[];
   toggling: string | null;
-  onToggle: (supplyId: string, currentlyDeducted: boolean) => void;
+  onToggle: (saleItemId: string, supplyId: string, currentlyDeducted: boolean) => void;
 };
 
 function EditableSuppliesPanel({ supplyLinks, toggling, onToggle }: EditableSuppliesPanelProps) {
-  // Deduplicar por supply_id (puede haber multiples sale_items con el mismo supply)
-  const askLinks = new Map<string, SaleItemSupplyRow>();
-  for (const l of supplyLinks) {
-    if (l.deduct_mode === "ask" && !askLinks.has(l.supply_id)) {
-      askLinks.set(l.supply_id, l);
-    }
-  }
-  if (!askLinks.size) return null;
+  const askLinks = supplyLinks.filter((l) => l.deduct_mode === "ask");
+  if (!askLinks.length) return null;
 
-  // Cargar nombres de supplies para mostrar
+  const supplyIds = [...new Set(askLinks.map((l) => l.supply_id))];
   const [supplyNames, setSupplyNames] = useState<Map<string, string>>(new Map());
   useEffect(() => {
     void databaseManager.database().then((db) =>
       db.select<{ id: string; name: string }[]>(
-        `SELECT id, name FROM supplies WHERE id IN (${[...askLinks.keys()].map((_, i) => `$${i + 1}`).join(",")})`,
-        [...askLinks.keys()],
+        `SELECT id, name FROM supplies WHERE id IN (${supplyIds.map((_, i) => `$${i + 1}`).join(",")})`,
+        supplyIds,
       )
     ).then((rows) => setSupplyNames(new Map(rows.map((r) => [r.id, r.name]))));
   }, [supplyLinks]);
@@ -1186,14 +1184,16 @@ function EditableSuppliesPanel({ supplyLinks, toggling, onToggle }: EditableSupp
     <Box mt="2" p="3" bg="purple.50" borderRadius="md" borderWidth="1px" borderColor="purple.100">
       <Text fontSize="xs" fontWeight="bold" color="purple.700" mb="3">Insumos editables (menos de 24h)</Text>
       <Flex direction="column" gap="2">
-        {[...askLinks.values()].map((link) => {
+        {askLinks.map((link) => {
           const isDeducted = link.deducted === 1;
-          const name = supplyNames.get(link.supply_id) ?? link.supply_id;
-          const busy = toggling === link.supply_id;
+          const supplyName = supplyNames.get(link.supply_id) ?? link.supply_id;
+          const displayName = link.product_name ? `${supplyName} (${link.product_name})` : supplyName;
+          const toggleKey = `${link.sale_item_id}:${link.supply_id}`;
+          const busy = toggling === toggleKey;
           return (
-            <Flex key={link.supply_id} align="center" justify="space-between" gap="3">
+            <Flex key={toggleKey} align="center" justify="space-between" gap="3">
               <Box flex="1">
-                <Text fontSize="xs" fontWeight="semibold" color="gray.700">{name}</Text>
+                <Text fontSize="xs" fontWeight="semibold" color="gray.700">{displayName}</Text>
                 <Text fontSize="xs" color={isDeducted ? "red.500" : "green.600"}>
                   {isDeducted ? `Desconto ${link.quantity_deducted}` : "No contó (SKIP)"}
                 </Text>
@@ -1203,7 +1203,7 @@ function EditableSuppliesPanel({ supplyLinks, toggling, onToggle }: EditableSupp
                 colorPalette={isDeducted ? "orange" : "blue"}
                 variant="outline"
                 loading={busy}
-                onClick={() => onToggle(link.supply_id, isDeducted)}
+                onClick={() => onToggle(link.sale_item_id, link.supply_id, isDeducted)}
               >
                 {isDeducted ? "Marcar SKIP" : "Contar"}
               </Button>
