@@ -16,6 +16,7 @@ import {
   CircleDollarSign,
   Download,
   FileText,
+  Filter,
   Pencil,
   Plus,
   Search,
@@ -27,6 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { jsPDF } from "jspdf";
 import { sessionContext } from "../../core/session/SessionContext";
 import { PaginationControls } from "../../components/ui/PaginationControls";
+import { ScrollableSelect } from "../../components/ui/ScrollableSelect";
 import { notify } from "../../components/ui/AppToaster";
 import { businessConfigService } from "../config/BusinessConfigService";
 import {
@@ -39,13 +41,21 @@ import {
 import { databaseManager } from "../../infrastructure/sqlite/DatabaseManager";
 import { backupScheduler } from "../backup/BackupScheduler";
 
+type CashFilters = { dateFrom: string; dateTo: string; cajero: string };
+const EMPTY_CASH_FILTERS: CashFilters = { dateFrom: "", dateTo: "", cajero: "" };
+
 export function CashRegisterView() {
   const current = sessionContext.current();
+  const isSuperAdmin = current?.user.role === "SUPERADMIN";
+  const isDemo = sessionContext.isDemo();
   const [open, setOpen] = useState<CashSession | null>(null);
   const [summary, setSummary] = useState<CashSummary | null>(null);
   const [expenses, setExpenses] = useState<CashExpense[]>([]);
   const [sessions, setSessions] = useState<CashSession[]>([]);
   const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<CashFilters>(EMPTY_CASH_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<CashFilters>(EMPTY_CASH_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [dialog, setDialog] = useState<"open" | "close" | "close-empty" | "delete" | null>(
@@ -83,16 +93,29 @@ export function CashRegisterView() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  const cajeroOptions = useMemo(() => {
+    const names = sessions
+      .map((s) => s.userName)
+      .filter((n): n is string => Boolean(n));
+    const unique = [...new Set(names)].filter((name) => {
+      if (isSuperAdmin) return name !== "Modo Demo";
+      if (isDemo) return name !== "juanpamacast" && name !== "Juan Pablo Madrigal Castañeda";
+      return name !== "juanpamacast" && name !== "Juan Pablo Madrigal Castañeda" && name !== "Modo Demo";
+    });
+    return unique.sort();
+  }, [sessions, isSuperAdmin, isDemo]);
+
   const filtered = useMemo(() => {
     const query = search.toLowerCase().trim();
-    return sessions.filter(
-      (cash) =>
-        !query ||
-        `#${cash.sessionNumber} ${cash.userName ?? ""} ${cash.status === "OPEN" ? "abierta" : "cerrada"}`
-          .toLowerCase()
-          .includes(query),
-    );
-  }, [sessions, search]);
+    return sessions.filter((cash) => {
+      if (query && !`#${cash.sessionNumber} ${cash.userName ?? ""} ${cash.status === "OPEN" ? "abierta" : "cerrada"}`.toLowerCase().includes(query)) return false;
+      if (appliedFilters.cajero && cash.userName !== appliedFilters.cajero) return false;
+      if (appliedFilters.dateFrom && cash.openedAt < appliedFilters.dateFrom + "T00:00:00.000Z") return false;
+      const dateTo = appliedFilters.dateTo || new Date().toISOString().slice(0, 10);
+      if (cash.openedAt > dateTo + "T23:59:59.999Z") return false;
+      return true;
+    });
+  }, [sessions, search, appliedFilters]);
   const pages = Math.max(
     1,
     pageSize ? Math.ceil(filtered.length / pageSize) : 1,
@@ -223,22 +246,27 @@ export function CashRegisterView() {
           onRefresh={refresh}
         />
       ) : null}
-      <Box mt="8" mb="4" maxW="420px" position="relative">
-        <Search
-          size={17}
-          color="#6b7280"
-          style={{ position: "absolute", left: 12, top: 11, zIndex: 1 }}
-        />
-        <Input
-          pl="10"
-          placeholder="Buscar por caja, cajero o estado..."
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
-            setPage(1);
-          }}
-        />
-      </Box>
+      <Flex mt="8" mb="4" gap="3" align="center" wrap="wrap">
+        <Box flex="1" minW="240px" position="relative">
+          <Search size={17} color="#6b7280" style={{ position: "absolute", left: 12, top: 11, zIndex: 1 }} />
+          <Input pl="10" placeholder="Buscar por caja, cajero o estado..." value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
+        </Box>
+        <Button variant="outline" onClick={() => setFiltersOpen(true)}><Filter size={17} />Filtros</Button>
+        {Object.values(appliedFilters).some(Boolean) ? (
+          <Button variant="outline" colorPalette="red" onClick={() => { setFilters(EMPTY_CASH_FILTERS); setAppliedFilters(EMPTY_CASH_FILTERS); setPage(1); }}><X size={16} />Limpiar filtros</Button>
+        ) : null}
+      </Flex>
+      {Object.values(appliedFilters).some(Boolean) ? (
+        <Flex mb="4" px="3" py="2" bg="purple.50" borderWidth="1px" borderColor="purple.100" borderRadius="md" align="center" justify="space-between" gap="3" wrap="wrap">
+          <Text color="purple.800" fontSize="sm">
+            Filtros activos: {[
+              appliedFilters.cajero ? `Cajero: ${appliedFilters.cajero}` : null,
+              appliedFilters.dateFrom ? `Desde: ${appliedFilters.dateFrom}` : null,
+              appliedFilters.dateTo ? `Hasta: ${appliedFilters.dateTo}` : null,
+            ].filter(Boolean).join(" · ")}
+          </Text>
+        </Flex>
+      ) : null}
       <Box
         bg="white"
         borderWidth="1px"
@@ -333,7 +361,70 @@ export function CashRegisterView() {
           onClose={() => setDetail(null)}
         />
       ) : null}
+      {filtersOpen ? (
+        <CashFiltersModal
+          filters={filters}
+          cajeroOptions={cajeroOptions}
+          onChange={setFilters}
+          onApply={() => { setAppliedFilters({ ...filters }); setFiltersOpen(false); setPage(1); }}
+          onClose={() => setFiltersOpen(false)}
+        />
+      ) : null}
     </Box>
+  );
+}
+
+function CashFiltersModal({ filters, cajeroOptions, onChange, onApply, onClose }: {
+  filters: CashFilters;
+  cajeroOptions: string[];
+  onChange: (f: CashFilters) => void;
+  onApply: () => void;
+  onClose: () => void;
+}) {
+  const set = (key: keyof CashFilters) => (value: string) => onChange({ ...filters, [key]: value });
+  const dateError = filters.dateFrom && filters.dateTo && filters.dateTo < filters.dateFrom;
+
+  return (
+    <Flex position="fixed" inset="0" zIndex="modal" bg="blackAlpha.500" align="center" justify="center" p="4">
+      <Box w="full" maxW="420px" bg="white" borderRadius="md" boxShadow="2xl" p="6">
+        <Flex justify="space-between" align="center" mb="5">
+          <Text fontWeight="bold" fontSize="lg">Filtros</Text>
+          <Button size="sm" variant="ghost" onClick={onClose}><X size={18} /></Button>
+        </Flex>
+
+        <Stack gap="4">
+          <Box>
+            <Text mb="1" fontSize="sm" fontWeight="semibold" color="gray.700">Cajero</Text>
+            <ScrollableSelect
+              placement="bottom"
+              value={filters.cajero || "ALL"}
+              placeholder="Todos"
+              options={[{ value: "ALL", label: "Todos" }, ...cajeroOptions.map((n) => ({ value: n, label: n }))]}
+              onValueChange={(v) => set("cajero")(v === "ALL" ? "" : v)}
+            />
+          </Box>
+
+          <Grid templateColumns="1fr 1fr" gap="4">
+            <Box>
+              <Text mb="1" fontSize="sm" fontWeight="semibold" color="gray.700">Desde</Text>
+              <Input type="date" value={filters.dateFrom} onChange={(e) => set("dateFrom")(e.target.value)} />
+            </Box>
+            <Box>
+              <Text mb="1" fontSize="sm" fontWeight="semibold" color="gray.700">Hasta</Text>
+              <Input type="date" value={filters.dateTo} min={filters.dateFrom || undefined} onChange={(e) => set("dateTo")(e.target.value)} />
+            </Box>
+          </Grid>
+          {dateError ? (
+            <Text fontSize="xs" color="red.500">La fecha Hasta no puede ser menor que Desde.</Text>
+          ) : null}
+        </Stack>
+
+        <Flex mt="6" justify="end" gap="3">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button colorPalette="purple" disabled={!!dateError} onClick={onApply}>Aplicar</Button>
+        </Flex>
+      </Box>
+    </Flex>
   );
 }
 

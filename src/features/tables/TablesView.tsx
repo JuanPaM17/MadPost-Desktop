@@ -1517,6 +1517,8 @@ function CuentaTab({ table, cash, order, onOrderOpened, onOrderClosed, onComanda
 }
 
 type SplitSlot = { id: string; items: TableOrderItem[]; deliveryType: DeliveryType | null };
+// Unidad individual expandida para la UI de split (quantity siempre 1, splitKey unico por copia)
+type SplitUnit = TableOrderItem & { splitKey: string };
 
 // Pasa openedJustNow=true solo cuando la orden acaba de crearse desde el botón Abrir Mesa
 function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, onComandaSent, onCanvasInfoChange }: {
@@ -1971,7 +1973,8 @@ function OccupiedCuentaTab({ table, order, cash, openedJustNow, onOrderClosed, o
             ) : (
               <Button size="sm" colorPalette="green" flex="1" onClick={() => {
                 void reload().then(() => {
-                  if (rootItems.length === 1) { setCheckout("todo"); return; }
+                  const totalUnits = rootItems.reduce((s, i) => s + i.quantity, 0);
+                  if (totalUnits === 1) { setCheckout("todo"); return; }
                   setCheckout("selector");
                 });
               }}>Cobrar</Button>
@@ -2548,43 +2551,56 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
 }) {
   const rootScope = scopeItems.filter((i) => !i.combo_table_order_item_id);
 
+  // Expandir cada item con quantity>1 en N unidades individuales de quantity=1
+  const allUnits: SplitUnit[] = rootScope.flatMap((item) => {
+    const additionsTotal = item.additions.reduce((s, a) => s + a.price * a.quantity, 0);
+    const unitSubtotal = item.unit_price + additionsTotal;
+    return Array.from({ length: item.quantity }, (_, idx) => ({
+      ...item,
+      quantity: 1,
+      subtotal: unitSubtotal,
+      splitKey: `${item.id}__${idx}`,
+    }));
+  });
+
   // Un único domicilio por orden (primer cliente del scope con delivery_type_id)
   const scopeClientIds = new Set(scopeItems.map((i) => i.table_order_client_id).filter(Boolean));
   const deliveryClient = clients.find((c) => scopeClientIds.has(c.id) && c.delivery_type_id);
   const orderDeliveryType = deliveryClient ? (deliveryTypes.find((d) => d.id === deliveryClient.delivery_type_id) ?? null) : null;
 
-  const [slots, setSlots] = useState<SplitSlot[]>([
-    { id: crypto.randomUUID(), items: [], deliveryType: null },
-    { id: crypto.randomUUID(), items: [], deliveryType: null },
+  type UnitSlot = { id: string; units: SplitUnit[]; deliveryType: DeliveryType | null };
+  const [slots, setSlots] = useState<UnitSlot[]>([
+    { id: crypto.randomUUID(), units: [], deliveryType: null },
+    { id: crypto.randomUUID(), units: [], deliveryType: null },
   ]);
 
-  const assignedItemIds = new Set(slots.flatMap((s) => s.items.map((i) => i.id)));
+  const assignedKeys = new Set(slots.flatMap((s) => s.units.map((u) => u.splitKey)));
   const deliveryAssigned = slots.some((s) => s.deliveryType !== null);
-  const unassignedItems = rootScope.filter((i) => !assignedItemIds.has(i.id));
+  const unassignedUnits = allUnits.filter((u) => !assignedKeys.has(u.splitKey));
   const showDeliveryUnassigned = orderDeliveryType && !deliveryAssigned;
 
   function addSlot() {
-    setSlots((prev) => [...prev, { id: crypto.randomUUID(), items: [], deliveryType: null }]);
+    setSlots((prev) => [...prev, { id: crypto.randomUUID(), units: [], deliveryType: null }]);
   }
 
   function removeSlot(slotId: string) {
     setSlots((prev) => prev.filter((s) => s.id !== slotId));
   }
 
-  function assignItem(item: TableOrderItem, toSlotId: string) {
-    setSlots((prev) => prev.map((s) => s.id === toSlotId ? { ...s, items: [...s.items, item] } : s));
+  function assignUnit(unit: SplitUnit, toSlotId: string) {
+    setSlots((prev) => prev.map((s) => s.id === toSlotId ? { ...s, units: [...s.units, unit] } : s));
   }
 
-  function unassignItem(itemId: string, fromSlotId: string) {
-    setSlots((prev) => prev.map((s) => s.id === fromSlotId ? { ...s, items: s.items.filter((i) => i.id !== itemId) } : s));
+  function unassignUnit(splitKey: string, fromSlotId: string) {
+    setSlots((prev) => prev.map((s) => s.id === fromSlotId ? { ...s, units: s.units.filter((u) => u.splitKey !== splitKey) } : s));
   }
 
-  function moveItemToNext(item: TableOrderItem, currentSlotId: string) {
+  function moveUnitToNext(unit: SplitUnit, currentSlotId: string) {
     const currentIdx = slots.findIndex((s) => s.id === currentSlotId);
     const nextIdx = (currentIdx + 1) % slots.length;
     setSlots((prev) => prev.map((s, idx) => {
-      if (idx === currentIdx) return { ...s, items: s.items.filter((i) => i.id !== item.id) };
-      if (idx === nextIdx) return { ...s, items: [...s.items, item] };
+      if (idx === currentIdx) return { ...s, units: s.units.filter((u) => u.splitKey !== unit.splitKey) };
+      if (idx === nextIdx) return { ...s, units: [...s.units, unit] };
       return s;
     }));
   }
@@ -2607,9 +2623,25 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
     setSlots((prev) => prev.map((s) => s.id === fromSlotId ? { ...s, deliveryType: null } : s));
   }
 
-  const totalUnassigned = unassignedItems.length + (showDeliveryUnassigned ? 1 : 0);
+  // Reconstruir SplitSlot[] agrupando unidades del mismo item original
+  function buildSplitSlots(): SplitSlot[] {
+    return slots.map((slot) => {
+      const grouped = new Map<string, TableOrderItem>();
+      for (const unit of slot.units) {
+        const existing = grouped.get(unit.id);
+        if (existing) {
+          grouped.set(unit.id, { ...existing, quantity: existing.quantity + 1, subtotal: existing.subtotal + unit.subtotal });
+        } else {
+          grouped.set(unit.id, { ...unit, quantity: 1, subtotal: unit.subtotal });
+        }
+      }
+      return { id: slot.id, items: Array.from(grouped.values()), deliveryType: slot.deliveryType };
+    });
+  }
+
+  const totalUnassigned = unassignedUnits.length + (showDeliveryUnassigned ? 1 : 0);
   const allAssigned = totalUnassigned === 0;
-  const noEmptySlots = slots.every((s) => s.items.length > 0 || s.deliveryType !== null);
+  const noEmptySlots = slots.every((s) => s.units.length > 0 || s.deliveryType !== null);
   const canCobrar = allAssigned && noEmptySlots;
 
   const validationMsg = !allAssigned
@@ -2635,13 +2667,21 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
             <Box mb="4">
               <Text fontSize="xs" fontWeight="bold" color="orange.600" mb="2">SIN ASIGNAR ({totalUnassigned})</Text>
               <Stack gap="1">
-                {unassignedItems.map((item) => (
-                  <Flex key={item.id} align="center" gap="2" px="3" py="2" bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.200">
-                    <Text fontSize="xs" flex="1">{item.quantity > 1 ? `${item.quantity}x ` : ""}{item.product_name}</Text>
-                    <Text fontSize="xs" color="gray.600" mr="2">{fmtMoney(item.subtotal)}</Text>
-                    <Flex gap="1">
+                {unassignedUnits.map((unit) => (
+                  <Flex key={unit.splitKey} align="start" gap="2" px="3" py="2" bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.200">
+                    <Box flex="1">
+                      <Text fontSize="xs">{unit.product_name}</Text>
+                      {unit.selected_option ? (
+                        <Text fontSize="xs" color="purple.600" fontStyle="italic" pl="2">&gt;&gt; {unit.selected_option}</Text>
+                      ) : null}
+                      {unit.additions.map((a, i) => (
+                        <Text key={i} fontSize="xs" color="gray.500" pl="2">+ {a.quantity > 1 ? `${a.quantity}x ` : ""}{a.name}</Text>
+                      ))}
+                    </Box>
+                    <Text fontSize="xs" color="gray.600" mr="2" flexShrink="0">{fmtMoney(unit.subtotal)}</Text>
+                    <Flex gap="1" flexShrink="0">
                       {slots.map((s, idx) => (
-                        <Button key={s.id} size="xs" variant="outline" colorPalette="purple" onClick={() => assignItem(item, s.id)}>P{idx + 1}</Button>
+                        <Button key={s.id} size="xs" variant="outline" colorPalette="purple" onClick={() => assignUnit(unit, s.id)}>P{idx + 1}</Button>
                       ))}
                     </Flex>
                   </Flex>
@@ -2664,8 +2704,8 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
           {/* Slots */}
           <Stack gap="3">
             {slots.map((slot, idx) => {
-              const slotTotal = slot.items.reduce((s, i) => s + i.subtotal, 0) + (slot.deliveryType?.price ?? 0);
-              const isEmpty = slot.items.length === 0 && !slot.deliveryType;
+              const slotTotal = slot.units.reduce((s, u) => s + u.subtotal, 0) + (slot.deliveryType?.price ?? 0);
+              const isEmpty = slot.units.length === 0 && !slot.deliveryType;
               return (
                 <Box key={slot.id} borderWidth="1px" borderColor={isEmpty ? "gray.200" : "purple.200"} borderRadius="md" overflow="hidden">
                   <Flex px="3" py="2" bg={isEmpty ? "gray.50" : "purple.50"} align="center" justify="space-between">
@@ -2683,15 +2723,23 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
                     </Box>
                   ) : (
                     <Stack gap="0" px="3" py="2">
-                      {slot.items.map((item) => (
-                        <Flex key={item.id} align="center" gap="2" py="1">
-                          <Text fontSize="xs" flex="1">{item.quantity > 1 ? `${item.quantity}x ` : ""}{item.product_name}</Text>
-                          <Text fontSize="xs" color="gray.500" mr="1">{fmtMoney(item.subtotal)}</Text>
+                      {slot.units.map((unit) => (
+                        <Flex key={unit.splitKey} align="start" gap="2" py="1">
+                          <Box flex="1">
+                            <Text fontSize="xs">{unit.product_name}</Text>
+                            {unit.selected_option ? (
+                              <Text fontSize="xs" color="purple.600" fontStyle="italic" pl="2">&gt;&gt; {unit.selected_option}</Text>
+                            ) : null}
+                            {unit.additions.map((a, i) => (
+                              <Text key={i} fontSize="xs" color="gray.500" pl="2">+ {a.quantity > 1 ? `${a.quantity}x ` : ""}{a.name}</Text>
+                            ))}
+                          </Box>
+                          <Text fontSize="xs" color="gray.500" mr="1" flexShrink="0">{fmtMoney(unit.subtotal)}</Text>
                           <Tip text="Mover a siguiente persona">
-                            <Button size="xs" variant="ghost" colorPalette="gray" onClick={() => moveItemToNext(item, slot.id)}><ChevronRight size={12} /></Button>
+                            <Button size="xs" variant="ghost" colorPalette="gray" onClick={() => moveUnitToNext(unit, slot.id)}><ChevronRight size={12} /></Button>
                           </Tip>
                           <Tip text="Quitar">
-                            <Button size="xs" variant="ghost" colorPalette="red" onClick={() => unassignItem(item.id, slot.id)}><X size={12} /></Button>
+                            <Button size="xs" variant="ghost" colorPalette="red" onClick={() => unassignUnit(unit.splitKey, slot.id)}><X size={12} /></Button>
                           </Tip>
                         </Flex>
                       ))}
@@ -2726,7 +2774,7 @@ function SplitBillModal({ table, scopeItems, deliveryTypes, clients, onClose, on
               <Text fontSize="xs" color="orange.600">{validationMsg}</Text>
             </Flex>
           )}
-          <Button w="full" colorPalette="green" size="lg" disabled={!canCobrar} onClick={() => onStartCobro(slots)}>
+          <Button w="full" colorPalette="green" size="lg" disabled={!canCobrar} onClick={() => onStartCobro(buildSplitSlots())}>
             Cobrar — Persona 1 de {slots.length}
           </Button>
         </Box>

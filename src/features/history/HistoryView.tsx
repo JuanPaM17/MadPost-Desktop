@@ -71,9 +71,10 @@ type Filters = {
   attendedBy: string;
   paymentMethod: string;
   clientName: string;
+  saleType: string;
 };
 
-const EMPTY_FILTERS: Filters = { sessionId: "", dateFrom: "", dateTo: "", collectedBy: "", attendedBy: "", paymentMethod: "", clientName: "" };
+const EMPTY_FILTERS: Filters = { sessionId: "", dateFrom: "", dateTo: "", collectedBy: "", attendedBy: "", paymentMethod: "", clientName: "", saleType: "" };
 
 // ---------------------------------------------------------------------------
 // Data
@@ -92,13 +93,15 @@ async function loadSales(tenantId: string, userId: string, isAdmin: boolean, fil
   if (filters.dateFrom) conditions.push("s.created_at >= $" + (params.push(filters.dateFrom + "T00:00:00.000Z")));
   if (filters.dateTo) conditions.push("s.created_at <= $" + (params.push(filters.dateTo + "T23:59:59.999Z")));
   if (filters.paymentMethod === "SPLIT") {
-    conditions.push("(s.cash_amount > 0 AND s.card_amount > 0)");
+    conditions.push("(COALESCE(s.cash_amount, 0) > 0 AND COALESCE(s.card_amount, 0) > 0)");
   } else if (filters.paymentMethod) {
-    conditions.push("s.payment_method=$" + (params.push(filters.paymentMethod)) + " AND NOT (s.cash_amount > 0 AND s.card_amount > 0)");
+    conditions.push("s.payment_method=$" + (params.push(filters.paymentMethod)) + " AND NOT (COALESCE(s.cash_amount, 0) > 0 AND COALESCE(s.card_amount, 0) > 0)");
   }
   if (filters.collectedBy) conditions.push("s.collected_by_user_id=$" + (params.push(filters.collectedBy)));
   if (filters.attendedBy) conditions.push("s.user_id=$" + (params.push(filters.attendedBy)));
   if (filters.clientName) conditions.push("s.client_name LIKE $" + (params.push("%" + filters.clientName + "%")));
+  if (filters.saleType === "salon") conditions.push("s.is_delivery = 0");
+  if (filters.saleType === "domicilio") conditions.push("s.is_delivery = 1");
 
   const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
   const limit = filters.sessionId ? "" : "LIMIT 500";
@@ -132,9 +135,13 @@ async function loadCashOptions(tenantId: string, userId: string, isAdmin: boolea
   }));
 }
 
-async function loadUsers(tenantId: string, isSuperAdmin: boolean): Promise<{ id: string; label: string }[]> {
+async function loadUsers(tenantId: string, isSuperAdmin: boolean, isDemo: boolean): Promise<{ id: string; label: string }[]> {
   const database = await databaseManager.database();
-  const where = isSuperAdmin ? "tenant_id=$1 AND active=1" : "tenant_id=$1 AND active=1 AND role != 'SUPERADMIN'";
+  const where = isSuperAdmin
+    ? "tenant_id=$1 AND active=1 AND role != 'DEMO'"
+    : isDemo
+    ? "tenant_id=$1 AND active=1 AND role != 'SUPERADMIN'"
+    : "tenant_id=$1 AND active=1 AND role != 'SUPERADMIN' AND role != 'DEMO'";
   const rows = await database.select<{ id: string; display_name: string | null; username: string }[]>(
     `SELECT id, display_name, username FROM users WHERE ${where} ORDER BY display_name, username`,
     [tenantId],
@@ -195,6 +202,7 @@ export function HistoryView({ initialInvoice }: { initialInvoice?: string } = {}
   const userId = session?.user.id ?? "";
   const isAdmin = session?.user.role === "ADMIN" || session?.user.role === "SUPERADMIN";
   const isSuperAdmin = session?.user.role === "SUPERADMIN";
+  const isDemo = sessionContext.isDemo();
 
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -215,7 +223,7 @@ export function HistoryView({ initialInvoice }: { initialInvoice?: string } = {}
   useEffect(() => {
     void Promise.all([
       loadCashOptions(tenantId, userId, isAdmin),
-      isAdmin ? loadUsers(tenantId, isSuperAdmin) : Promise.resolve([]),
+      loadUsers(tenantId, isSuperAdmin, isDemo),
     ]).then(([cash, users]) => {
       setCashOptions(cash);
       setUserOptions(users);
@@ -376,8 +384,8 @@ export function HistoryView({ initialInvoice }: { initialInvoice?: string } = {}
         <FiltersModal
           filters={filters}
           cashOptions={cashOptions}
-          userOptions={isAdmin ? userOptions : []}
-          isAdmin={isAdmin}
+          userOptions={userOptions}
+          isAdmin={true}
           onChange={setFilters}
           onApply={applyFilters}
           onClose={() => setFiltersOpen(false)}
@@ -1306,6 +1314,10 @@ function FiltersModal({ filters, cashOptions, userOptions, isAdmin, onChange, on
 
           <FieldLabel label="Metodo de pago">
             <ScrollableSelect placement="bottom" value={filters.paymentMethod || "ALL"} placeholder="Todos" options={[{ value: "ALL", label: "Todos" }, { value: "CASH", label: "Efectivo" }, { value: "CARD", label: "Tarjeta" }, { value: "SPLIT", label: "Dividido" }]} onValueChange={(v) => set("paymentMethod")(v === "ALL" ? "" : v)} />
+          </FieldLabel>
+
+          <FieldLabel label="Tipo">
+            <ScrollableSelect placement="bottom" value={filters.saleType || "ALL"} placeholder="Todos" options={[{ value: "ALL", label: "Todos" }, { value: "salon", label: "Salon" }, { value: "domicilio", label: "Domicilio" }]} onValueChange={(v) => set("saleType")(v === "ALL" ? "" : v)} />
           </FieldLabel>
 
           <FieldLabel label="Desde">
