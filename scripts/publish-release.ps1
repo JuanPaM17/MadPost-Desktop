@@ -629,7 +629,8 @@ No modificar manualmente. Actualizado por `scripts/publish-release.ps1`.
     }
 
     # Escribir manifiesto del canal actual
-    [System.IO.File]::WriteAllText((Resolve-Path $manifestFileName).Path, $manifestJson, [System.Text.UTF8Encoding]::new($false))
+    $manifestAbsPath = Join-Path (Get-Location).Path $manifestFileName
+    [System.IO.File]::WriteAllText($manifestAbsPath, $manifestJson, [System.Text.UTF8Encoding]::new($false))
     git add $manifestFileName
     git commit -m "release($Channel): v$Version"
     $ErrorActionPreference = "Continue"
