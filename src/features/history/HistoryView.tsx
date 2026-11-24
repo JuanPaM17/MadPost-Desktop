@@ -742,7 +742,7 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
 
           <Box flex="1" overflowY="auto" p="5">
           {activeTab === "stock" ? (
-            <SaleStockLogs invoiceNumber={sale.invoice_number} />
+            <SaleStockLogs invoiceNumber={sale.invoice_number} saleId={sale.id} saleCreatedAt={sale.created_at} />
           ) : null}
 
           {activeTab === "info" ? <>
@@ -957,24 +957,134 @@ function SaleDetailPanel({ detail, loading, onClose, onDeleted, onUpdated }: { d
 // ---------------------------------------------------------------------------
 // SaleStockLogs
 // ---------------------------------------------------------------------------
-type StockLogRow = { id: string; item_type: string; item_name: string; delta: number; stock_before: number | null; stock_after: number | null; created_at: string };
+type StockLogRow = { id: string; item_type: string; item_name: string; delta: number; stock_before: number | null; stock_after: number | null; created_at: string; reason: string | null };
+type SaleItemSupplyRow = { sale_item_id: string; supply_id: string; deducted: number; quantity_deducted: number; deduct_mode: string };
 
-function SaleStockLogs({ invoiceNumber }: { invoiceNumber: string }) {
+const RETRO_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function SaleStockLogs({ invoiceNumber, saleId, saleCreatedAt }: { invoiceNumber: string; saleId: string; saleCreatedAt: string }) {
   const [logs, setLogs] = useState<StockLogRow[]>([]);
+  const [supplyLinks, setSupplyLinks] = useState<SaleItemSupplyRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState<string | null>(null); // supply_id en proceso
+
+  const isEditable = Date.now() - new Date(saleCreatedAt).getTime() < RETRO_WINDOW_MS;
+
+  async function loadData() {
+    const db = await databaseManager.database();
+    const [fetchedLogs, fetchedLinks] = await Promise.all([
+      db.select<StockLogRow[]>(
+        `SELECT id, item_type, item_name, delta, stock_before, stock_after, created_at, reason
+         FROM stock_logs
+         WHERE item_name LIKE $1 OR item_name LIKE $2
+         ORDER BY created_at ASC`,
+        [`%[Factura ${invoiceNumber}]%`, `%[Eliminacion venta ${invoiceNumber}]%`],
+      ),
+      db.select<SaleItemSupplyRow[]>(
+        `SELECT sis.sale_item_id, sis.supply_id, sis.deducted, sis.quantity_deducted,
+                COALESCE(ps.deduct_mode, 'always') AS deduct_mode
+         FROM sale_item_supplies sis
+         JOIN sale_items si ON si.id = sis.sale_item_id
+         LEFT JOIN product_supplies ps ON ps.supply_id = sis.supply_id AND ps.product_id = si.product_id
+         WHERE si.sale_id = $1`,
+        [saleId],
+      ),
+    ]);
+    setLogs(fetchedLogs);
+    setSupplyLinks(fetchedLinks);
+  }
 
   useEffect(() => {
     setLoading(true);
-    void databaseManager.database().then((db) =>
-      db.select<StockLogRow[]>(
-        `SELECT id, item_type, item_name, delta, stock_before, stock_after, created_at
-         FROM stock_logs
-         WHERE item_name LIKE $1 OR item_name LIKE $2
-         ORDER BY created_at DESC`,
-        [`%[Factura ${invoiceNumber}]%`, `%[Eliminacion venta ${invoiceNumber}]%`],
-      )
-    ).then(setLogs).catch(() => setLogs([])).finally(() => setLoading(false));
-  }, [invoiceNumber]);
+    void loadData().catch(() => {}).finally(() => setLoading(false));
+  }, [invoiceNumber, saleId]);
+
+  async function handleToggle(supplyId: string, currentlyDeducted: boolean) {
+    setToggling(supplyId);
+    try {
+      const db = await databaseManager.database();
+      const session = sessionContext.current();
+      const tenantId = session?.tenantId ?? "";
+      const userId = session?.user.id ?? "";
+      const userName = session?.user.display_name || session?.user.username || "";
+      const now = new Date().toISOString();
+
+      // El link de este supply
+      const link = supplyLinks.find((l) => l.supply_id === supplyId && l.deducted === (currentlyDeducted ? 1 : 0));
+      if (!link) return;
+      const qty = Number(link.quantity_deducted);
+
+      // Buscar el log del supply por supply_id directamente
+      const originalLogFull = await db.select<{ id: string; item_name: string; delta: number; stock_before: number; stock_after: number }[]>(
+        `SELECT id, item_name, delta, stock_before, stock_after FROM stock_logs
+         WHERE item_name LIKE $1 AND item_type='SUPPLY' AND item_id=$2
+           AND (reason IS NULL OR reason='SKIP')
+           AND item_name NOT LIKE '%[Ajuste retro%'
+         LIMIT 1`,
+        [`%[Factura ${invoiceNumber}]%`, supplyId],
+      );
+      if (!originalLogFull.length) return;
+      const origLog = originalLogFull[0];
+
+      // Stock actual del supply
+      const supplyRows = await db.select<{ stock: number; name: string }[]>(
+        "SELECT stock, name FROM supplies WHERE id=$1",
+        [supplyId],
+      );
+      if (!supplyRows.length) return;
+      const currentStock = Number(supplyRows[0].stock);
+      const supplyName = supplyRows[0].name;
+
+      if (currentlyDeducted) {
+        // Deducido -> SKIP: devolver al stock, marcar log original como SKIP
+        const newStock = currentStock + qty;
+        await db.execute("UPDATE supplies SET stock=$1, updated_at=$2 WHERE id=$3", [newStock, now, supplyId]);
+        await db.execute("UPDATE stock_logs SET delta=0, reason='SKIP' WHERE id=$1", [origLog.id]);
+        await db.execute(
+          "UPDATE sale_item_supplies SET deducted=0, skipped_reason='CASHIER_SKIP_RETRO' WHERE sale_item_id=$1 AND supply_id=$2",
+          [link.sale_item_id, supplyId],
+        );
+        const retId = crypto.randomUUID();
+        const retName = `${supplyName} [Ajuste retro #${invoiceNumber}]`;
+        await db.execute(
+          "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at,reason) VALUES($1,$2,$3,$4,'SUPPLY',$5,$6,$7,$8,$9,$10,$11)",
+          [retId, tenantId, userId, userName, supplyId, retName, qty, currentStock, newStock, now, "RETRO_SKIP"],
+        );
+        const { syncQueueRepository } = await import("../../infrastructure/sqlite/repositories");
+        await syncQueueRepository.enqueue("supplies", supplyId, "UPDATE", { id: supplyId, stock: newStock, updated_at: now });
+        await syncQueueRepository.enqueue("stock_logs", origLog.id, "UPDATE", { id: origLog.id, delta: 0, reason: "SKIP" });
+        await syncQueueRepository.enqueue("stock_logs", retId, "INSERT", { id: retId, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "SUPPLY", item_id: supplyId, item_name: retName, delta: qty, stock_before: currentStock, stock_after: newStock, created_at: now, reason: "RETRO_SKIP" });
+        await syncQueueRepository.enqueue("sale_item_supplies", link.sale_item_id + ":" + supplyId, "UPDATE", { sale_item_id: link.sale_item_id, supply_id: supplyId, deducted: false, skipped_reason: "CASHIER_SKIP_RETRO" });
+      } else {
+        // SKIP -> Deducido: descontar del stock, restaurar log original
+        const newStock = currentStock - qty;
+        await db.execute("UPDATE supplies SET stock=$1, updated_at=$2 WHERE id=$3", [newStock, now, supplyId]);
+        await db.execute("UPDATE stock_logs SET delta=$1, reason=NULL WHERE id=$2", [-qty, origLog.id]);
+        await db.execute(
+          "UPDATE sale_item_supplies SET deducted=1, skipped_reason=NULL WHERE sale_item_id=$1 AND supply_id=$2",
+          [link.sale_item_id, supplyId],
+        );
+        const retId = crypto.randomUUID();
+        const retName = `${supplyName} [Ajuste retro #${invoiceNumber}]`;
+        await db.execute(
+          "INSERT INTO stock_logs(id,tenant_id,user_id,user_name,item_type,item_id,item_name,delta,stock_before,stock_after,created_at,reason) VALUES($1,$2,$3,$4,'SUPPLY',$5,$6,$7,$8,$9,$10,$11)",
+          [retId, tenantId, userId, userName, supplyId, retName, -qty, currentStock, newStock, now, "RETRO_DEDUCT"],
+        );
+        const { syncQueueRepository } = await import("../../infrastructure/sqlite/repositories");
+        await syncQueueRepository.enqueue("supplies", supplyId, "UPDATE", { id: supplyId, stock: newStock, updated_at: now });
+        await syncQueueRepository.enqueue("stock_logs", origLog.id, "UPDATE", { id: origLog.id, delta: -qty, reason: null });
+        await syncQueueRepository.enqueue("stock_logs", retId, "INSERT", { id: retId, tenant_id: tenantId, user_id: userId, user_name: userName, item_type: "SUPPLY", item_id: supplyId, item_name: retName, delta: -qty, stock_before: currentStock, stock_after: newStock, created_at: now, reason: "RETRO_DEDUCT" });
+        await syncQueueRepository.enqueue("sale_item_supplies", link.sale_item_id + ":" + supplyId, "UPDATE", { sale_item_id: link.sale_item_id, supply_id: supplyId, deducted: true, skipped_reason: null });
+      }
+
+      await loadData();
+      notify.success("Insumo actualizado");
+    } catch (e) {
+      notify.error("No se pudo actualizar el insumo", e instanceof Error ? e.message : undefined);
+    } finally {
+      setToggling(null);
+    }
+  }
 
   if (loading) return <Flex py="10" justify="center"><Text color="gray.400" fontSize="sm">Cargando...</Text></Flex>;
 
@@ -997,9 +1107,7 @@ function SaleStockLogs({ invoiceNumber }: { invoiceNumber: string }) {
   const typeColor = (t: string) => t === "PRODUCT" ? "purple" : t === "SUPPLY" ? "blue" : "orange";
   const fmtStock = (v: number | null) => v == null ? "-" : Number.isInteger(v) ? String(v) : v.toFixed(1);
   const fmtDelta = (v: number) => `${v > 0 ? "+" : ""}${fmtStock(v)}`;
-
-  // Extraer nombre limpio (quitar sufijo [Factura X] o [Eliminacion venta X])
-  const cleanName = (name: string) => name.replace(/\s*\[(?:Factura|Eliminacion venta)\s+[^\]]+\]/, "").trim();
+  const cleanName = (name: string) => name.replace(/\s*\[(?:Factura|Eliminacion venta|Ajuste retro)\s*[^\]]*\]/, "").trim();
 
   return (
     <Flex direction="column" gap="5">
@@ -1009,22 +1117,101 @@ function SaleStockLogs({ invoiceNumber }: { invoiceNumber: string }) {
             <Badge colorPalette={typeColor(type)} size="sm">{typeLabel(type)}</Badge>
           </Flex>
           <Flex direction="column" gap="2">
-            {items.map((log) => (
-              <Box key={log.id} px="3" py="2" bg="gray.50" borderRadius="md" borderWidth="1px" borderColor="gray.100">
-                <Flex justify="space-between" align="baseline" gap="2">
-                  <Text fontSize="xs" fontWeight="semibold" color="gray.700" flex="1">{cleanName(log.item_name)}</Text>
-                  <Text fontSize="sm" fontWeight="bold" color={log.delta >= 0 ? "green.600" : "red.600"}>{fmtDelta(log.delta)}</Text>
-                </Flex>
-                <Flex gap="3" mt="1">
-                  <Text fontSize="xs" color="gray.400">Antes: {fmtStock(log.stock_before)}</Text>
-                  <Text fontSize="xs" color="gray.400">Despues: {fmtStock(log.stock_after)}</Text>
-                </Flex>
-              </Box>
-            ))}
+            {items.map((log) => {
+              const isRetroLog = log.item_name.includes("[Ajuste retro");
+              const isSkipped = log.reason === "SKIP";
+
+              return (
+                <Box key={log.id} px="3" py="2" bg={isSkipped ? "gray.50" : isRetroLog ? "blue.50" : "gray.50"} borderRadius="md" borderWidth="1px" borderColor={isSkipped ? "orange.100" : isRetroLog ? "blue.100" : "gray.100"} opacity={isSkipped ? 0.7 : 1}>
+                  <Flex justify="space-between" align="center" gap="2">
+                    <Box flex="1">
+                      <Flex align="center" gap="2">
+                        <Text fontSize="xs" fontWeight="semibold" color="gray.700">{cleanName(log.item_name)}</Text>
+                        {isSkipped ? <Badge size="xs" colorPalette="orange">SKIP</Badge> : null}
+                        {isRetroLog ? <Badge size="xs" colorPalette="blue">Ajuste retro</Badge> : null}
+                      </Flex>
+                      <Flex gap="3" mt="1">
+                        <Text fontSize="xs" color="gray.400">Antes: {fmtStock(log.stock_before)}</Text>
+                        <Text fontSize="xs" color="gray.400">Despues: {fmtStock(log.stock_after)}</Text>
+                      </Flex>
+                    </Box>
+                    <Text fontSize="sm" fontWeight="bold" color={log.delta > 0 ? "green.600" : log.delta < 0 ? "red.600" : "gray.400"} flexShrink="0">{fmtDelta(log.delta)}</Text>
+                  </Flex>
+                </Box>
+              );
+            })}
           </Flex>
         </Box>
       ))}
+      {/* Panel de toggles para insumos editables */}
+      {isEditable && supplyLinks.some((l) => l.deduct_mode === "ask") ? (
+        <EditableSuppliesPanel
+          supplyLinks={supplyLinks}
+          toggling={toggling}
+          onToggle={handleToggle}
+        />
+      ) : null}
     </Flex>
+  );
+}
+
+type EditableSuppliesPanelProps = {
+  supplyLinks: SaleItemSupplyRow[];
+  toggling: string | null;
+  onToggle: (supplyId: string, currentlyDeducted: boolean) => void;
+};
+
+function EditableSuppliesPanel({ supplyLinks, toggling, onToggle }: EditableSuppliesPanelProps) {
+  // Deduplicar por supply_id (puede haber multiples sale_items con el mismo supply)
+  const askLinks = new Map<string, SaleItemSupplyRow>();
+  for (const l of supplyLinks) {
+    if (l.deduct_mode === "ask" && !askLinks.has(l.supply_id)) {
+      askLinks.set(l.supply_id, l);
+    }
+  }
+  if (!askLinks.size) return null;
+
+  // Cargar nombres de supplies para mostrar
+  const [supplyNames, setSupplyNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    void databaseManager.database().then((db) =>
+      db.select<{ id: string; name: string }[]>(
+        `SELECT id, name FROM supplies WHERE id IN (${[...askLinks.keys()].map((_, i) => `$${i + 1}`).join(",")})`,
+        [...askLinks.keys()],
+      )
+    ).then((rows) => setSupplyNames(new Map(rows.map((r) => [r.id, r.name]))));
+  }, [supplyLinks]);
+
+  return (
+    <Box mt="2" p="3" bg="purple.50" borderRadius="md" borderWidth="1px" borderColor="purple.100">
+      <Text fontSize="xs" fontWeight="bold" color="purple.700" mb="3">Insumos editables (menos de 24h)</Text>
+      <Flex direction="column" gap="2">
+        {[...askLinks.values()].map((link) => {
+          const isDeducted = link.deducted === 1;
+          const name = supplyNames.get(link.supply_id) ?? link.supply_id;
+          const busy = toggling === link.supply_id;
+          return (
+            <Flex key={link.supply_id} align="center" justify="space-between" gap="3">
+              <Box flex="1">
+                <Text fontSize="xs" fontWeight="semibold" color="gray.700">{name}</Text>
+                <Text fontSize="xs" color={isDeducted ? "red.500" : "green.600"}>
+                  {isDeducted ? `Desconto ${link.quantity_deducted}` : "No contó (SKIP)"}
+                </Text>
+              </Box>
+              <Button
+                size="xs"
+                colorPalette={isDeducted ? "orange" : "blue"}
+                variant="outline"
+                loading={busy}
+                onClick={() => onToggle(link.supply_id, isDeducted)}
+              >
+                {isDeducted ? "Marcar SKIP" : "Contar"}
+              </Button>
+            </Flex>
+          );
+        })}
+      </Flex>
+    </Box>
   );
 }
 
